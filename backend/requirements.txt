@@ -4,3 +4,7 @@ scikit-learn
 pandas
 joblib
 nltk
+numpy
+scipy
+httpx
+PyMySQL

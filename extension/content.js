@@ -1,108 +1,238 @@
-// content.js
+const BANNER_ID = "spam-detector-banner";
+const ANALYZE_DEBOUNCE_MS = 900;
 
-// Utility functions (inlined for simplicity without bundler)
-const getEmailData = () => {
-    const senderElement = document.querySelector('.gD');
-    const subjectElement = document.querySelector('.hP');
-    const bodyElement = document.querySelector('.a3s.aiL');
+let analyzeTimer = null;
+let lastSignature = "";
+let analysisInFlight = false;
+let autoScanEnabled = true;
 
-    return {
-        sender: senderElement ? senderElement.getAttribute('email') : null,
-        subject: subjectElement ? subjectElement.innerText : null,
-        body: bodyElement ? bodyElement.innerText : null
-    };
-};
+function runtimeMessage(message) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+            if (!response?.ok) {
+                reject(new Error(response?.error || "Unknown extension error."));
+                return;
+            }
+            resolve(response.data);
+        });
+    });
+}
 
-const injectBanner = (data, prediction) => {
-    // Remove existing banner
-    const existingBanner = document.getElementById('spam-detector-banner');
-    if (existingBanner) existingBanner.remove();
+async function refreshSettings() {
+    try {
+        const settings = await runtimeMessage({ command: "get_settings" });
+        autoScanEnabled = Boolean(settings.autoScanEnabled);
+    } catch (error) {
+        autoScanEnabled = true;
+    }
+}
 
-    const banner = document.createElement('div');
-    banner.id = 'spam-detector-banner';
+function emailSignature(data) {
+    return JSON.stringify([data.sender || "", data.subject || "", data.body || ""]);
+}
 
-    // Styles
-    banner.style.width = '100%';
-    banner.style.padding = '15px';
-    banner.style.marginBottom = '10px';
-    banner.style.fontFamily = 'Arial, sans-serif';
-    banner.style.fontWeight = 'bold';
-    banner.style.display = 'flex';
-    banner.style.alignItems = 'center';
-    banner.style.justifyContent = 'space-between';
-    banner.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
-    banner.style.transition = 'all 0.5s ease-in-out';
-    banner.style.zIndex = '9999';
+function removeBanner() {
+    document.getElementById(BANNER_ID)?.remove();
+}
 
-    if (prediction.label === 'Spam') {
-        banner.style.backgroundColor = '#ffebee';
-        banner.style.borderLeft = '5px solid #f44336';
-        banner.style.color = '#c62828';
-        banner.innerHTML = `
-            <div>
-                <span style="font-size: 1.2em; margin-right: 10px;">🚨</span>
-                WARNING: Likely SPAM (Confidence: ${(prediction.confidence * 100).toFixed(1)}%)
-                <div style="font-weight: normal; font-size: 0.9em; margin-top: 5px;">${prediction.reason}</div>
-            </div>
-        `;
-    } else if (prediction.label === 'whitelisted') {
-        banner.style.backgroundColor = '#e3f2fd';
-        banner.style.borderLeft = '5px solid #2196f3';
-        banner.style.color = '#1565c0';
-        banner.innerHTML = `
-            <div>
-                <span style="font-size: 1.2em; margin-right: 10px;">🛡️</span>
-                SAFE: Whitelisted Sender
-                <div style="font-weight: normal; font-size: 0.9em; margin-top: 5px;">${prediction.reason}</div>
-            </div>
-        `;
-    } else {
-        banner.style.backgroundColor = '#e8f5e9';
-        banner.style.borderLeft = '5px solid #4caf50';
-        banner.style.color = '#2e7d32';
-        banner.innerHTML = `
-            <div>
-                <span style="font-size: 1.2em; margin-right: 10px;">✅</span>
-                SAFE: No spam detected (Confidence: ${(prediction.confidence * 100).toFixed(1)}%)
-            </div>
-        `;
+function normalizedFeedbackLabel(predictionLabel) {
+    return predictionLabel === "Spam" ? "Spam" : "Not Spam";
+}
+
+async function submitBannerFeedback(payload, prediction, userLabel, statusNode, actionButtons) {
+    if (!payload || !prediction?.prediction_id) {
+        statusNode.textContent = "Feedback is unavailable for this message.";
+        statusNode.hidden = false;
+        return;
     }
 
-    // Inject above the email body
-    const emailContainer = document.querySelector('.a3s.aiL').parentElement;
-    if (emailContainer) {
-        emailContainer.insertBefore(banner, emailContainer.firstChild);
-    }
-};
-
-const analyzeEmail = async () => {
-    const data = getEmailData();
-    if (!data.sender || !data.body) return;
+    actionButtons.forEach((button) => {
+        button.disabled = true;
+    });
+    statusNode.hidden = false;
+    statusNode.textContent = "Saving feedback...";
 
     try {
-        const response = await fetch("http://localhost:8000/predict", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data)
+        const response = await runtimeMessage({
+            command: "submit_feedback",
+            payload: {
+                prediction_id: prediction.prediction_id,
+                sender: payload.sender || "",
+                subject: payload.subject || "",
+                body: payload.body || "",
+                predicted_label: prediction.label,
+                predicted_confidence: prediction.confidence,
+                user_label: userLabel,
+                source: "gmail_banner"
+            }
         });
-        const prediction = await response.json();
-        injectBanner(data, prediction);
+        statusNode.textContent = `Feedback saved (${String(response.verdict || "ok").replace("_", " ")}).`;
     } catch (error) {
-        console.error("Error analyzing email:", error);
+        actionButtons.forEach((button) => {
+            button.disabled = false;
+        });
+        statusNode.textContent = error.message || "Could not save feedback.";
     }
-};
+}
 
-// Observer to detect when an email is opened
+function createFeedbackButton(label, modifierClass, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `spam-detector-banner__action ${modifierClass}`;
+    button.textContent = label;
+    button.addEventListener("click", onClick);
+    return button;
+}
+
+function createBanner(prediction, payload) {
+    const banner = document.createElement("section");
+    banner.id = BANNER_ID;
+
+    const variant = prediction.label === "Spam"
+        ? "spam"
+        : prediction.label === "whitelisted"
+            ? "trusted"
+            : "safe";
+
+    banner.className = `spam-detector-banner spam-detector-banner--${variant}`;
+
+    const header = document.createElement("div");
+    header.className = "spam-detector-banner__header";
+
+    const badge = document.createElement("span");
+    badge.className = "spam-detector-banner__badge";
+    badge.textContent = prediction.label === "Spam"
+        ? "Spam alert"
+        : prediction.label === "whitelisted"
+            ? "Whitelisted"
+            : "Looks safe";
+
+    const confidence = document.createElement("span");
+    confidence.className = "spam-detector-banner__confidence";
+    confidence.textContent = `${Math.round((prediction.confidence || 0) * 100)}% confidence`;
+
+    header.append(badge, confidence);
+    banner.appendChild(header);
+
+    const reason = document.createElement("p");
+    reason.className = "spam-detector-banner__reason";
+    reason.textContent = prediction.reason || "Analysis completed.";
+    banner.appendChild(reason);
+
+    if (prediction.analysis) {
+        const analysis = document.createElement("p");
+        analysis.className = "spam-detector-banner__analysis";
+        analysis.textContent = prediction.analysis;
+        banner.appendChild(analysis);
+    }
+
+    const cues = (prediction.explanations?.length ? prediction.explanations : prediction.signals || []).slice(0, 3);
+    if (cues.length) {
+        const signals = document.createElement("div");
+        signals.className = "spam-detector-banner__signals";
+        cues.forEach((signal) => {
+            const chip = document.createElement("span");
+            chip.className = "spam-detector-banner__chip";
+            chip.textContent = signal;
+            signals.appendChild(chip);
+        });
+        banner.appendChild(signals);
+    }
+
+    const feedbackSection = document.createElement("div");
+    feedbackSection.className = "spam-detector-banner__feedback";
+
+    const feedbackLabel = document.createElement("span");
+    feedbackLabel.className = "spam-detector-banner__feedback-label";
+    feedbackLabel.textContent = "Feedback";
+
+    const feedbackActions = document.createElement("div");
+    feedbackActions.className = "spam-detector-banner__actions";
+
+    const feedbackStatus = document.createElement("p");
+    feedbackStatus.className = "spam-detector-banner__feedback-status";
+    feedbackStatus.hidden = true;
+
+    const buttons = [];
+    const correctButton = createFeedbackButton(
+        "Looks right",
+        "spam-detector-banner__action--neutral",
+        () => submitBannerFeedback(payload, prediction, normalizedFeedbackLabel(prediction.label), feedbackStatus, buttons),
+    );
+    const spamButton = createFeedbackButton(
+        "Mark Spam",
+        "spam-detector-banner__action--danger",
+        () => submitBannerFeedback(payload, prediction, "Spam", feedbackStatus, buttons),
+    );
+    const safeButton = createFeedbackButton(
+        "Mark Safe",
+        "spam-detector-banner__action--safe",
+        () => submitBannerFeedback(payload, prediction, "Not Spam", feedbackStatus, buttons),
+    );
+
+    buttons.push(correctButton, spamButton, safeButton);
+    feedbackActions.append(correctButton, spamButton, safeButton);
+    feedbackSection.append(feedbackLabel, feedbackActions, feedbackStatus);
+    banner.appendChild(feedbackSection);
+
+    return banner;
+}
+
+function injectBanner(prediction, payload) {
+    removeBanner();
+    const anchor = window.DomParser?.getBannerAnchor?.();
+    if (!anchor) {
+        return;
+    }
+    anchor.insertBefore(createBanner(prediction, payload), anchor.firstChild);
+}
+
+async function analyzeOpenEmail(force = false) {
+    const data = window.DomParser?.getEmailData?.();
+    if (!data || (!data.subject && !data.body)) {
+        return;
+    }
+
+    if (!autoScanEnabled && !force) {
+        return;
+    }
+
+    const signature = emailSignature(data);
+    if (!force && (analysisInFlight || signature === lastSignature)) {
+        return;
+    }
+
+    analysisInFlight = true;
+    lastSignature = signature;
+
+    try {
+        const prediction = await runtimeMessage({
+            command: "analyze_email",
+            payload: data
+        });
+        injectBanner(prediction, data);
+    } catch (error) {
+        lastSignature = "";
+        console.warn("Spam detector could not analyze email:", error.message);
+    } finally {
+        analysisInFlight = false;
+    }
+}
+
+function scheduleAnalysis(force = false) {
+    clearTimeout(analyzeTimer);
+    analyzeTimer = setTimeout(() => analyzeOpenEmail(force), ANALYZE_DEBOUNCE_MS);
+}
+
 const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-        if (mutation.addedNodes.length) {
-            // Check if email body is present
-            if (document.querySelector('.a3s.aiL')) {
-                // Debounce or check if already analyzed
-                if (!document.getElementById('spam-detector-banner')) {
-                    setTimeout(analyzeEmail, 1000); // Wait a bit for full load
-                }
-            }
+        if (mutation.addedNodes.length > 0) {
+            scheduleAnalysis(false);
+            break;
         }
     }
 });
@@ -112,9 +242,19 @@ observer.observe(document.body, {
     subtree: true
 });
 
-// Listen for messages from Popup
+document.addEventListener("visibilitychange", async () => {
+    if (!document.hidden) {
+        await refreshSettings();
+        scheduleAnalysis(true);
+    }
+});
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.command === "get_email_data") {
-        sendResponse(getEmailData());
+        sendResponse(window.DomParser?.getEmailData?.() || null);
     }
+});
+
+refreshSettings().then(() => {
+    scheduleAnalysis(true);
 });

@@ -1,167 +1,344 @@
-# Spam Email Detection - Chrome Extension
+# Spam Email Detection
 
-AI-powered spam detection system for Gmail with a modern, animated Chrome extension and Python backend.
+Spam and phishing detection for Gmail, built as a Chrome extension plus a FastAPI backend with explainable predictions, user feedback capture, retraining, and optional MySQL-backed feedback storage.
 
-**Last Updated:** November 23, 2025
+## Current Project State
 
-## Features
+- Layered detection: whitelist, trusted-service catalog, rule-based phishing checks, benign-context rules, and ML classification
+- Explainable predictions in both the backend response and extension UI
+- Feedback loop with `/feedback`, `/feedback/summary`, and `/retrain`
+- Feedback-aware retraining from either local JSONL storage or MySQL
+- Deployment-ready backend startup with env-based config, Docker, and Docker Compose
+- Extension options page for backend URL, timeout, history, auto-scan, and retraining
 
-- **Advanced Animated SVG Icon:** Futuristic hexagonal shield with pulsing, rotating layers and orbiting particles
-- **Modern UI:** Vibrant neon colors, breathing animations, floating particles
-- **Clear Labels:** "Spam" / "Not Spam" / "Whitelisted" for easy understanding
-- **Single Input:** Paste any email for instant analysis
-- **4-Layer Detection:** Whitelist, financial domains, spam keywords, ML model
-- **50% Accuracy Threshold:** Balanced spam detection (MultinomialNB)
-- **Real-time Gmail Integration:** Auto-scan opened emails
-- **Transactional Email Recognition:** Detects legitimate financial services
+## Architecture
 
-## Tech Stack
-
-### Frontend (Chrome Extension)
-- Manifest V3
-- Modern CSS animations (50+ keyframes)
-- Glassmorphism design
-- Responsive UI
-
-### Backend (Python)
-- FastAPI
-- scikit-learn (MultinomialNB)
-- NLTK for text processing (stemming, stopwords)
-- TF-IDF vectorization (5000 features, bigrams)
-- Class balancing via oversampling
-
-## Installation
-
-### Backend Setup
-
-1. Navigate to backend directory:
-```bash
-cd backend
+```text
+Gmail UI
+  -> Chrome extension
+     -> FastAPI backend
+        -> layered spam detector
+        -> feedback store (JSONL or MySQL)
+        -> retraining pipeline
 ```
-
-2. Create virtual environment:
-```bash
-python -m venv venv
-.\venv\Scripts\activate  # Windows
-source venv/bin/activate  # Mac/Linux
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Train the model:
-```bash
-python model/train_model.py
-```
-
-5. Start the server:
-```bash
-python app.py
-```
-
-Server will run on `http://127.0.0.1:8000`
-
-### Extension Setup
-
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the `extension` folder
-5. Pin the extension to your toolbar
-
-## Usage
-
-1. **Manual Analysis:**
-   - Click extension icon
-   - Paste complete email text
-   - Click "Analyze"
-
-2. **Gmail Integration:**
-   - Open any email in Gmail
-   - Click "Get from Gmail" in extension
-   - Click "Analyze"
-
-3. **Auto-Detection:**
-   - Content script automatically scans opened emails
-   - Red banner appears if spam detected
 
 ## Project Structure
 
-```
-spam-extension-project/
+```text
+sic-final-project/
 ├── backend/
 │   ├── data/
-│   │   ├── spam.csv           # Training dataset
-│   │   └── trusted_domains.csv # Whitelist
+│   │   ├── spam.csv
+│   │   ├── trusted_domains.csv
+│   │   └── whitelist.csv
 │   ├── model/
-│   │   ├── train_model.py     # ML model training
-│   │   ├── spam_model.pkl     # Trained model
-│   │   └── vectorizer.pkl     # TF-IDF vectorizer
-│   ├── app.py                 # FastAPI server
-│   ├── requirements.txt       # Python dependencies
-│   └── verify_model.py        # Model testing
+│   │   └── train_model.py
+│   ├── tests/
+│   ├── app.py
+│   ├── feedback_store.py
+│   ├── run_server.py
+│   ├── runtime_config.py
+│   ├── spam_detector_core.py
+│   ├── verify_model.py
+│   └── requirements.txt
 ├── extension/
-│   ├── assets/                # Icons
-│   ├── manifest.json          # Extension config
-│   ├── popup.html            # Popup UI
-│   ├── popup.css             # Styles & animations
-│   ├── popup.js              # Popup logic
-│   ├── content.js            # Gmail integration
-│   └── background.js         # Service worker
+│   ├── background.js
+│   ├── content.css
+│   ├── content.js
+│   ├── manifest.json
+│   ├── options.css
+│   ├── options.html
+│   ├── options.js
+│   ├── popup.css
+│   ├── popup.html
+│   └── popup.js
+├── .env.example
+├── docker-compose.yml
+├── Dockerfile
 └── README.md
 ```
 
-## Detection Layers
+## Local Backend Setup
 
-1. **Whitelist Check:** Custom trusted domains
-2. **Financial Domain Verification:** 30+ known services (SBI, Amazon Pay, etc.)
-3. **Spam Keyword Detection:** 15+ spam indicators
-4. **ML Model:** MultinomialNB with 50% confidence threshold (0.5)
-
-## Customization
-
-### Add Trusted Domains
-Edit `backend/data/trusted_domains.csv` - one domain per line
-
-### Adjust Threshold
-In `backend/app.py`, change `spam_threshold` value (currently 0.75)
-
-### Retrain Model
-Add emails to `backend/data/spam.csv` and run:
-```bash
-python model/train_model.py
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.\.venv\Scripts\python.exe backend\model\train_model.py
+.\.venv\Scripts\python.exe backend\verify_model.py
+.\.venv\Scripts\python.exe backend\run_server.py
 ```
 
-## Performance
+Windows shortcut:
 
-- **99.88% Training Accuracy** (after class balancing)
-- **70%+ Verification Accuracy** on difficult test cases
-- **50% Production Threshold** (MultinomialNB, optimized for balance)
-- **Multi-layer filtering** reduces false positives
-- **Recognizes 30+ financial services**
+```powershell
+backend\run.bat
+```
 
-## Contributing
+## VS Code Run / Debug
 
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
-5. Open Pull Request
+Workspace files were added in [.vscode/launch.json](/D:/ml/sic-final-project/.vscode/launch.json), [.vscode/tasks.json](/D:/ml/sic-final-project/.vscode/tasks.json), and [.vscode/settings.json](/D:/ml/sic-final-project/.vscode/settings.json).
 
-## License
+In VS Code:
 
-MIT License - feel free to use and modify!
+1. Open the project folder.
+2. Open `Run and Debug`.
+3. Choose `Backend: Run Server (MySQL)`.
+4. Enter your MySQL password when prompted.
+5. Start debugging.
 
-## Author
+Useful tasks:
 
-**Avijit Pal**  
-B.Tech CSE - 5th Semester  
-GitHub: [@AVijit005](https://github.com/AVijit005)
+- `Install Backend Requirements`
+- `Train Model (MySQL Feedback)`
+- `Verify Model`
+- `Health Check`
+- `Setup Backend (Install + Train + Verify)`
 
-Built as a final project for Secure & Intelligent Computing (SIC) course.
+Default backend URL:
 
----
+```text
+http://127.0.0.1:8000
+```
 
-*Project developed with focus on real-world spam detection using machine learning and modern web technologies.*
+## Run Process
+
+### Option 1: Run In VS Code
+
+1. Open the project folder in VS Code.
+2. Press `Ctrl+Shift+P`.
+3. Run `Tasks: Run Task`.
+4. Choose `Setup Backend (Install + Train + Verify)`.
+5. Enter your MySQL password when prompted.
+6. Open `Run and Debug`.
+7. Select `Backend: Run Server (MySQL)`.
+8. Press `F5`.
+9. Enter your MySQL password again when prompted.
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+You should see:
+
+- `status: ok`
+- `model_loaded: true`
+- `feedback_backend: mysql`
+
+### Option 2: Run In PowerShell
+
+```powershell
+cd D:\ml\sic-final-project
+
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+
+$env:SPAM_FEEDBACK_BACKEND = "mysql"
+$env:SPAM_DB_HOST = "127.0.0.1"
+$env:SPAM_DB_PORT = "3306"
+$env:SPAM_DB_USER = "root"
+$env:SPAM_DB_PASSWORD = "your-password"
+$env:SPAM_DB_NAME = "spam_detector"
+$env:SPAM_DB_TABLE = "feedback_entries"
+
+.\.venv\Scripts\python.exe backend\model\train_model.py
+.\.venv\Scripts\python.exe backend\run_server.py
+```
+
+Windows shortcut:
+
+```powershell
+backend\run.bat
+```
+
+### Load The Chrome Extension
+
+1. Open `chrome://extensions/`.
+2. Enable Developer mode.
+3. Click `Load unpacked`.
+4. Select the `extension` folder.
+5. Open the extension options page.
+6. Set backend URL to `http://127.0.0.1:8000`.
+7. Click `Check Backend`.
+
+### Use The Project
+
+1. Open Gmail.
+2. Open an email.
+3. Let auto-scan run or use the popup manually.
+4. Review the prediction banner and explanations.
+5. If a prediction is wrong, submit feedback.
+6. Use `Retrain From Feedback` from the extension options page when needed.
+
+## Deployment Readiness
+
+The backend now supports:
+
+- env-driven host, port, log level, retraining timeout, and startup behavior
+- automatic model bootstrap when artefacts are missing
+- Docker image startup through [backend/run_server.py](/D:/ml/sic-final-project/backend/run_server.py)
+- Docker Compose for backend-only or backend-plus-MySQL flows
+- remote HTTPS backend URLs from the extension
+
+### Environment Variables
+
+Key backend env vars:
+
+```powershell
+$env:SPAM_API_HOST = "0.0.0.0"
+$env:SPAM_API_PORT = "8000"
+$env:SPAM_LOG_LEVEL = "info"
+$env:SPAM_BOOTSTRAP_MODEL_IF_MISSING = "true"
+$env:SPAM_TRAIN_ON_START = "false"
+$env:SPAM_RETRAIN_TIMEOUT_SECONDS = "900"
+```
+
+### Docker
+
+Build and run:
+
+```powershell
+docker compose up --build
+```
+
+This starts the backend container and exposes it on port `8000` by default.
+
+To include MySQL too:
+
+```powershell
+docker compose --profile mysql up --build
+```
+
+Use [.env.example](/D:/ml/sic-final-project/.env.example) as your starting point for deployment configuration.
+
+If the backend container should use the Compose MySQL service, set these in your `.env`:
+
+```text
+SPAM_FEEDBACK_BACKEND=mysql
+SPAM_DB_HOST=mysql
+SPAM_DB_PORT=3306
+SPAM_DB_USER=root
+SPAM_DB_PASSWORD=root
+SPAM_DB_NAME=spam_detector
+```
+
+## Feedback Storage
+
+By default, reviewed feedback is stored in:
+
+```text
+backend/data/feedback.jsonl
+```
+
+Optional MySQL-backed feedback storage:
+
+```powershell
+$env:SPAM_FEEDBACK_BACKEND = "mysql"
+$env:SPAM_DB_HOST = "127.0.0.1"
+$env:SPAM_DB_PORT = "3306"
+$env:SPAM_DB_USER = "root"
+$env:SPAM_DB_PASSWORD = "your-password"
+$env:SPAM_DB_NAME = "spam_detector"
+$env:SPAM_DB_TABLE = "feedback_entries"
+```
+
+If `SPAM_FEEDBACK_BACKEND` is `auto`, the backend uses MySQL when DB variables are present and otherwise falls back to JSONL.
+
+## Extension Setup
+
+1. Open `chrome://extensions/`.
+2. Enable Developer mode.
+3. Click Load unpacked.
+4. Select the `extension` folder.
+5. Open the extension options page.
+6. Point the extension at either:
+   - `http://127.0.0.1:8000` for local use
+   - `https://your-domain.example` for a deployed backend
+
+Rules:
+
+- local development may use `http://localhost` or `http://127.0.0.1`
+- deployed backends must use `https://`
+
+## API
+
+### `GET /health`
+
+Reports:
+
+- backend readiness
+- model version and threshold
+- active feedback backend
+- feedback count
+- feedback rows already consumed into training
+- trusted-domain and whitelist counts
+
+### `POST /predict`
+
+```json
+{
+  "sender": "alerts@example.com",
+  "subject": "Security alert",
+  "body": "Click here to verify your account."
+}
+```
+
+Response includes:
+
+- label, confidence, reason, analysis
+- rule layer and sender domain
+- explanation cues and signals
+- prediction ID and evaluation timestamp
+
+### `POST /predict/batch`
+
+```json
+{
+  "emails": [
+    {
+      "sender": "alerts@example.com",
+      "subject": "Security alert",
+      "body": "Click here to verify your account."
+    }
+  ]
+}
+```
+
+### `POST /feedback`
+
+Stores the user-reviewed label for a prediction.
+
+### `GET /feedback/summary`
+
+Returns aggregate feedback counts.
+
+### `POST /retrain`
+
+Retrains the backend from:
+
+- the base spam dataset
+- all valid reviewed feedback rows from the configured feedback store
+
+The running API reloads the new artefacts after retraining completes.
+
+## Verification
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s backend\tests
+.\.venv\Scripts\python.exe backend\verify_model.py
+```
+
+Current verified state:
+
+- backend tests: `15/15` passed
+- verifier scenarios: `6/6` passed
+- saved model: `LogisticRegression`
+- holdout accuracy: `0.9750`
+- spam F1: `0.9222`
+
+## Notes
+
+- `backend/data/whitelist.csv` is the only source of automatic `whitelisted` decisions.
+- `backend/data/trusted_domains.csv` is a curated trusted-service catalog, not a bypass whitelist.
+- model artefacts are generated locally and ignored by git.
+- feedback is now automatically consumed by retraining from either JSONL or MySQL.

@@ -1,20 +1,69 @@
-const DomParser = {
-    getSender: () => {
-        const senderElement = document.querySelector('.gD');
-        return senderElement ? senderElement.getAttribute('email') : null;
-    },
+(() => {
+    const SELECTORS = {
+        sender: [".gD[email]", ".go [email]"],
+        subject: ["h2.hP", ".hP"],
+        body: [".a3s.aiL", ".a3s"]
+    };
 
-    getSubject: () => {
-        const subjectElement = document.querySelector('.hP');
-        return subjectElement ? subjectElement.innerText : null;
-    },
-
-    getBody: () => {
-        const bodyElement = document.querySelector('.a3s.aiL');
-        return bodyElement ? bodyElement.innerText : null;
+    function queryFirst(selectors) {
+        for (const selector of selectors) {
+            const element = document.querySelector(selector);
+            if (element) {
+                return element;
+            }
+        }
+        return null;
     }
-};
 
-// Export for use in content.js (if using modules, but for simple content script we can just include it or copy it)
-// For this project structure, we'll just import it or paste it in content.js if we don't use a bundler.
-// Since we are not using a bundler, I will include this logic directly in content.js or load it as a separate file in manifest.
+    function cleanText(value) {
+        return typeof value === "string"
+            ? value.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim()
+            : "";
+    }
+
+    function getSender() {
+        const element = queryFirst(SELECTORS.sender);
+        return cleanText(element?.getAttribute("email") || element?.textContent || "");
+    }
+
+    function getSubject() {
+        const element = queryFirst(SELECTORS.subject);
+        return cleanText(element?.textContent || "");
+    }
+
+    function getBodyElement() {
+        return queryFirst(SELECTORS.body);
+    }
+
+    function getBody() {
+        return cleanText(getBodyElement()?.innerText || "");
+    }
+
+    function getBannerAnchor() {
+        const bodyElement = getBodyElement();
+        if (!bodyElement) {
+            return null;
+        }
+
+        return bodyElement.closest(".adn.ads")
+            || bodyElement.parentElement
+            || bodyElement;
+    }
+
+    function getEmailData() {
+        return {
+            sender: getSender(),
+            subject: getSubject(),
+            body: getBody()
+        };
+    }
+
+    window.DomParser = {
+        getSender,
+        getSubject,
+        getBody,
+        getBodyElement,
+        getBannerAnchor,
+        getEmailData
+    };
+})();

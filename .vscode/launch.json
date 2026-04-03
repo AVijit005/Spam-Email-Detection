@@ -1,0 +1,52 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: Run Server (MySQL)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\backend\\run_server.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "SPAM_FEEDBACK_BACKEND": "mysql",
+        "SPAM_DB_HOST": "127.0.0.1",
+        "SPAM_DB_PORT": "3306",
+        "SPAM_DB_USER": "root",
+        "SPAM_DB_PASSWORD": "${input:mysqlPassword}",
+        "SPAM_DB_NAME": "spam_detector",
+        "SPAM_DB_TABLE": "feedback_entries"
+      }
+    },
+    {
+      "name": "Backend: Run Server (File Feedback)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\backend\\run_server.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "SPAM_FEEDBACK_BACKEND": "file"
+      }
+    },
+    {
+      "name": "Backend: Verify Model",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\backend\\verify_model.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ],
+  "inputs": [
+    {
+      "id": "mysqlPassword",
+      "type": "promptString",
+      "description": "MySQL password for SPAM_DB_PASSWORD",
+      "password": true
+    }
+  ]
+}

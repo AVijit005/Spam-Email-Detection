@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install Backend Requirements",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        "backend\\requirements.txt"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Train Model (MySQL Feedback)",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "backend\\model\\train_model.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "SPAM_FEEDBACK_BACKEND": "mysql",
+          "SPAM_DB_HOST": "127.0.0.1",
+          "SPAM_DB_PORT": "3306",
+          "SPAM_DB_USER": "root",
+          "SPAM_DB_PASSWORD": "${input:mysqlPassword}",
+          "SPAM_DB_NAME": "spam_detector",
+          "SPAM_DB_TABLE": "feedback_entries"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Verify Model",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "backend\\verify_model.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Health Check",
+      "type": "shell",
+      "command": "Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Depth 6",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "shell": {
+          "executable": "powershell",
+          "args": [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command"
+          ]
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Setup Backend (Install + Train + Verify)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Install Backend Requirements",
+        "Train Model (MySQL Feedback)",
+        "Verify Model"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "mysqlPassword",
+      "type": "promptString",
+      "description": "MySQL password for SPAM_DB_PASSWORD",
+      "password": true
+    }
+  ]
+}

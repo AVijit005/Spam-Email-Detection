@@ -1,96 +1,128 @@
+from __future__ import annotations
 
+import json
 import pickle
-import re
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem.porter import PorterStemmer
-import os
+import sys
+from pathlib import Path
 
-# Ensure NLTK data
-nltk.download('stopwords')
-ps = PorterStemmer()
 
-STOPWORDS = set(stopwords.words('english'))
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
-def preprocess_text(text):
-    if not isinstance(text, str):
-        return ""
-        
-    # Truncate to 3000 chars (matches training)
-    text = text[:3000]
-    
-    # Match training script: allow numbers and $
-    text = re.sub(r'[^a-z0-9\s$]', ' ', text)
-    text = text.lower()
-    text = text.split()
-    text = [ps.stem(word) for word in text if not word in STOPWORDS]
-    text = ' '.join(text)
-    return text
+from spam_detector_core import DEFAULT_SPAM_THRESHOLD, load_domain_catalog, load_user_whitelist, predict_email
 
-def verify():
-    print("Loading model...")
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(base_dir, 'model', 'spam_model.pkl')
-    vectorizer_path = os.path.join(base_dir, 'model', 'vectorizer.pkl')
 
-    if not os.path.exists(model_path):
-        print(f"Model file not found at {model_path}!")
-        return
-    
-    model = pickle.load(open(model_path, 'rb'))
-    vectorizer = pickle.load(open(vectorizer_path, 'rb'))
-    
-    test_cases = [
-        # Obvious Spam
-        ("WINNER!! As a valued network customer you have been selected to receive a £900 prize reward!", "SPAM"),
-        ("Free entry in 2 a wkly comp to win FA Cup final tkts 21st May 2005", "SPAM"),
-        
-        # Obvious Ham
-        ("Hey, are we still meeting for lunch today?", "HAM"),
-        ("Your Amazon order #123-456 has been shipped.", "HAM"),
-        
-        # Difficult / Subtle Spam (Phishing/Fraud)
-        ("URGENT: Your account has been suspended. Click here to verify.", "SPAM"),
-        ("Dear customer, please review the attached invoice #998877 for payment immediately.", "SPAM"),
-        ("Security Alert: We noticed a new login from Russia. Reset your password now.", "SPAM"),
-        
-        # Tricky Ham (Legitimate but sounds spammy)
-        ("Congratulations! You have been promoted to Senior Developer.", "HAM"),
-        ("Here is the free report you requested on Q3 earnings.", "HAM"),
-        ("Limited time offer: 50% off on all shoes at our store this weekend only.", "HAM") # Marketing email, usually HAM
-    ]
-    
-    print(f"\nRunning {len(test_cases)} test cases...")
+MODEL_PATH = CURRENT_DIR / "model" / "spam_model.pkl"
+VECTORIZER_PATH = CURRENT_DIR / "model" / "vectorizer.pkl"
+METADATA_PATH = CURRENT_DIR / "model" / "model_metadata.json"
+TRUSTED_DOMAINS_PATH = CURRENT_DIR / "data" / "trusted_domains.csv"
+USER_WHITELIST_PATH = CURRENT_DIR / "data" / "whitelist.csv"
+
+
+TEST_CASES = [
+    {
+        "sender": "promo@random-mailer.biz",
+        "subject": "WINNER!! Claim your £900 prize reward now",
+        "body": "Congratulations!!! Click here to verify and claim now.",
+        "expected": "Spam",
+    },
+    {
+        "sender": "security@unknown-alerts.net",
+        "subject": "URGENT: account suspended",
+        "body": "Confirm your identity immediately or your account will be deleted.",
+        "expected": "Spam",
+    },
+    {
+        "sender": "shipping@amazon.in",
+        "subject": "Your order has shipped",
+        "body": "Your Amazon package will arrive tomorrow.",
+        "expected": "Not Spam",
+    },
+    {
+        "sender": "boss@company.com",
+        "subject": "Weekly review",
+        "body": "Please send the revised slides before 4pm.",
+        "expected": "whitelisted",
+    },
+    {
+        "sender": "marketing@store.example",
+        "subject": "Limited time offer",
+        "body": "50% off all shoes this weekend only.",
+        "expected": "Not Spam",
+    },
+    {
+        "sender": "friend@example.org",
+        "subject": "Lunch today?",
+        "body": "Are we still meeting at 1pm near the office?",
+        "expected": "Not Spam",
+    },
+]
+
+
+def load_metadata() -> dict:
+    if not METADATA_PATH.exists():
+        return {}
+
+    with METADATA_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def verify() -> int:
+    print("=" * 60)
+    print("  Spam Detector - Verification")
+    print("=" * 60)
+
+    if not MODEL_PATH.exists() or not VECTORIZER_PATH.exists():
+        print("Model artefacts are missing.")
+        print("Run: python backend/model/train_model.py")
+        return 1
+
+    with MODEL_PATH.open("rb") as model_handle:
+        model = pickle.load(model_handle)
+    with VECTORIZER_PATH.open("rb") as vectorizer_handle:
+        vectorizer = pickle.load(vectorizer_handle)
+
+    metadata = load_metadata()
+    model_version = str(metadata.get("model_name", "unknown"))
+    spam_threshold = float(metadata.get("spam_threshold", DEFAULT_SPAM_THRESHOLD))
+    whitelist_domains = load_user_whitelist(USER_WHITELIST_PATH)
+    trusted_domain_catalog = load_domain_catalog(TRUSTED_DOMAINS_PATH)
+
+    print(f"Loaded model      : {model_version}")
+    print(f"Spam threshold    : {spam_threshold}")
+    print(f"User whitelist    : {len(whitelist_domains)}")
+    print(f"Domain catalog    : {len(trusted_domain_catalog)}")
+    print(f"Running test cases: {len(TEST_CASES)}\n")
+
     passed = 0
-    for text, expected in test_cases:
-        # Predict
-        processed_text = preprocess_text(text)
-        vectorized_text = vectorizer.transform([processed_text]).toarray()
-        prediction = model.predict(vectorized_text)[0]
-        proba = model.predict_proba(vectorized_text)[0]
-        
-        # Threshold logic (same as app.py)
-        spam_threshold = 0.5
-        if proba[1] >= spam_threshold:
-            label = "SPAM"
-            confidence = proba[1]
-        else:
-            label = "HAM"
-            confidence = proba[0]
-            
-        # Map to UI labels for checking
-        ui_label = "Spam" if label == "SPAM" else "Not Spam"
-        expected_ui = "Spam" if expected == "SPAM" else "Not Spam"
-            
-        result = "PASS" if ui_label == expected_ui else "FAIL"
-        print(f"Text: {text[:50]}...")
-        print(f"Expected: {expected_ui}, Got: {ui_label} (Conf: {confidence:.2f}) - {result}")
-        print("-" * 30)
-        
-        if result == "PASS":
-            passed += 1
-        
-    print(f"\nAccuracy on test cases: {passed}/{len(test_cases)} ({passed/len(test_cases)*100:.1f}%)")
+    for case in TEST_CASES:
+        result = predict_email(
+            model=model,
+            vectorizer=vectorizer,
+            sender=case["sender"],
+            subject=case["subject"],
+            body=case["body"],
+            whitelist_domains=whitelist_domains,
+            trusted_service_domains=trusted_domain_catalog,
+            model_version=model_version,
+            spam_threshold=spam_threshold,
+        )
+
+        ok = result.label == case["expected"]
+        marker = "PASS" if ok else "FAIL"
+        print(
+            f"[{marker}] expected={case['expected']:<11} got={result.label:<11} "
+            f"layer={result.rule_layer:<14} confidence={result.confidence:.2f}"
+        )
+        print(f"       {case['subject']}")
+        if result.signals:
+            print(f"       signals: {', '.join(result.signals)}")
+        passed += int(ok)
+
+    print(f"\nResult: {passed}/{len(TEST_CASES)} passed ({(passed / len(TEST_CASES)) * 100:.1f}%)")
+    return 0 if passed == len(TEST_CASES) else 1
+
 
 if __name__ == "__main__":
-    verify()
+    raise SystemExit(verify())

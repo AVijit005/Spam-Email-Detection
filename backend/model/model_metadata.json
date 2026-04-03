@@ -1,0 +1,65 @@
+{
+  "model_name": "LogisticRegression",
+  "trained_at_utc": "2026-04-03T15:06:25.310660+00:00",
+  "spam_threshold": 0.55,
+  "data_leakage_fixed": true,
+  "retrained_on_full_dataset": true,
+  "feature_shape": [
+    2605,
+    15016
+  ],
+  "feature_sources": {
+    "word_tfidf_features": 10000,
+    "char_tfidf_features": 5000,
+    "meta_features": 16
+  },
+  "dataset_rows": 2605,
+  "base_dataset_rows": 2605,
+  "class_counts": {
+    "0": 2172,
+    "1": 433
+  },
+  "holdout_split": {
+    "train_rows": 2084,
+    "test_rows": 521,
+    "feedback_rows_added_to_training": 0,
+    "eval_train_rows": 2084
+  },
+  "selected_metrics": {
+    "model_name": "LogisticRegression",
+    "accuracy": 0.975,
+    "spam_precision": 0.9625,
+    "spam_recall": 0.8851,
+    "spam_f1": 0.9222,
+    "support": 87
+  },
+  "candidate_metrics": [
+    {
+      "model_name": "LogisticRegression",
+      "accuracy": 0.975,
+      "spam_precision": 0.9625,
+      "spam_recall": 0.8851,
+      "spam_f1": 0.9222,
+      "support": 87
+    }
+  ],
+  "feedback_training": {
+    "feedback_backend": "mysql",
+    "feedback_file_present": false,
+    "feedback_lines_read": 0,
+    "parsed_feedback_entries": 0,
+    "invalid_json_lines": 0,
+    "skipped_invalid_label": 0,
+    "skipped_empty_message": 0,
+    "feedback_rows_used": 0,
+    "duplicates_collapsed": 0,
+    "correction_rows_used": 0,
+    "confirmation_rows_used": 0,
+    "label_counts": {
+      "0": 0,
+      "1": 0
+    },
+    "last_feedback_at_utc": null,
+    "sample_weight_total": 0.0
+  }
+}

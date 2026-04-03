@@ -22,15 +22,20 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo
 *~
+.env
 
 # OS
 .DS_Store
@@ -42,9 +47,13 @@ Thumbs.db
 # Logs
 *.log
 server.log
+backend/model/*.txt
+backend/data/feedback.jsonl
 
 # Temporary files
 *.tmp
+backend/tmp_info.txt
+backend/output.txt
 resize_icons.py
 check_data.py
 

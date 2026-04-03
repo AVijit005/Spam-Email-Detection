@@ -1,25 +1,16 @@
-# Known Issues & Future Work
+# Known Issues
 
 ## Current Limitations
-1. **Model doesn't retrain automatically** - Need to manually run `train_model.py` when adding new data
-2. **Port 8000 hardcoded** - Sometimes conflicts with other apps
-3. **No API authentication** - Anyone on localhost can access the API
-4. **Large emails slow down** - Text truncation helps but not perfect
 
-## Bugs Found (Fixed)
-- ~~Case sensitivity in label comparison (content.js)~~ ✅ Fixed
-- ~~"ham" vs "Not Spam" label inconsistency~~ ✅ Fixed  
-- ~~CSS corruption when trying to add 3D brain icon~~ ✅ Switched to SVG
+1. The backend can now be deployed remotely, but it still does not implement authentication or multi-user access control.
+2. Gmail DOM selectors can change, which may require updates in `extension/utils/domParser.js`.
+3. The model is still limited by the quality and age of `backend/data/spam.csv`; feedback helps, but the base dataset is still relatively small for modern phishing patterns.
+4. Retraining is automated and feedback-aware, but it is still user-triggered rather than scheduled.
+5. MySQL feedback storage is optional and env-driven; there is no in-app database credential management yet.
+6. Remote deployment is now supported, but the extension intentionally requires HTTPS for non-local backends.
 
-## Future Enhancements
-- [ ] Add user feedback system (thumbs up/down on predictions)
-- [ ] Implement caching for frequently scanned emails
-- [ ] Add confidence explanation (why email was marked spam)
-- [ ] Support for multiple languages (currently English only)
-- [ ] Dark/Light theme toggle
-- [ ] Export scan history as CSV
+## Improvement Ideas
 
-## Ideas Considered But Not Implemented
-- **Neural network approach** - Overkill for this dataset size
-- **Real-time Gmail scanning** - Privacy concerns, needs OAuth
-- **Browser notifications** - Could be annoying
+- Add regression fixtures from real Gmail examples
+- Add scheduled retraining or a reviewed-feedback queue before retraining
+- Add authenticated or remote backend deployment support

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spam Detector Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+<body>
+    <main class="page">
+        <section class="panel">
+            <h1>Spam Detector Settings</h1>
+            <p class="lead">Control the backend endpoint, timeout, auto-scan behavior, popup history size, and retraining workflow.</p>
+
+            <form id="settings-form" class="form">
+                <label class="field">
+                    <span>Backend URL</span>
+                    <input id="api-base-url" type="url" placeholder="http://127.0.0.1:8000">
+                    <small>Use `http://localhost` for local development, or `https://...` for a deployed backend.</small>
+                </label>
+
+                <label class="field">
+                    <span>Request Timeout (ms)</span>
+                    <input id="request-timeout" type="number" min="2000" max="60000" step="500">
+                </label>
+
+                <label class="field">
+                    <span>History Limit</span>
+                    <input id="history-limit" type="number" min="5" max="50" step="1">
+                </label>
+
+                <label class="toggle">
+                    <input id="auto-scan-enabled" type="checkbox">
+                    <span>Enable auto-scan on opened Gmail messages</span>
+                </label>
+
+                <div class="actions">
+                    <button id="btn-save" type="submit">Save Settings</button>
+                    <button id="btn-check" type="button" class="secondary">Check Backend</button>
+                    <button id="btn-retrain" type="button" class="secondary">Retrain From Feedback</button>
+                </div>
+            </form>
+
+            <p id="status" class="status"></p>
+        </section>
+    </main>
+
+    <script src="options.js"></script>
+</body>
+</html>

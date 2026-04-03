@@ -1,0 +1,9 @@
+@echo off
+cd /d d:\ml\sic-final-project\backend
+echo Installing requirements...
+..\.venv\Scripts\python.exe -m pip install -r requirements.txt
+echo Running model training...
+..\.venv\Scripts\python.exe model\train_model.py
+echo Verifying model...
+..\.venv\Scripts\python.exe verify_model.py
+echo DONE!

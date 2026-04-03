@@ -1,0 +1,47 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spam-detector-backend
+    ports:
+      - "${SPAM_API_PORT:-8000}:${SPAM_API_PORT:-8000}"
+    environment:
+      SPAM_API_HOST: ${SPAM_API_HOST:-0.0.0.0}
+      SPAM_API_PORT: ${SPAM_API_PORT:-8000}
+      SPAM_LOG_LEVEL: ${SPAM_LOG_LEVEL:-info}
+      SPAM_BOOTSTRAP_MODEL_IF_MISSING: ${SPAM_BOOTSTRAP_MODEL_IF_MISSING:-true}
+      SPAM_TRAIN_ON_START: ${SPAM_TRAIN_ON_START:-false}
+      SPAM_RETRAIN_TIMEOUT_SECONDS: ${SPAM_RETRAIN_TIMEOUT_SECONDS:-900}
+      SPAM_FEEDBACK_BACKEND: ${SPAM_FEEDBACK_BACKEND:-file}
+      SPAM_DB_HOST: ${SPAM_DB_HOST:-}
+      SPAM_DB_PORT: ${SPAM_DB_PORT:-3306}
+      SPAM_DB_USER: ${SPAM_DB_USER:-}
+      SPAM_DB_PASSWORD: ${SPAM_DB_PASSWORD:-}
+      SPAM_DB_NAME: ${SPAM_DB_NAME:-}
+      SPAM_DB_TABLE: ${SPAM_DB_TABLE:-feedback_entries}
+    volumes:
+      - ./backend/data:/app/backend/data
+      - ./backend/model:/app/backend/model
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: spam-detector-mysql
+    profiles: ["mysql"]
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-spam_detector}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    ports:
+      - "${MYSQL_PORT_FORWARD:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

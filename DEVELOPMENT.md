@@ -1,65 +1,78 @@
 # Development Notes
 
-## Project Journey
+## Where The Project Ended Up
 
-### Initial Challenges
-- Started with Logistic Regression but accuracy was around 75%
-- Class imbalance (2172 ham vs 433 spam) was causing poor spam detection
-- Realized I needed better preprocessing and class balancing
+The project is no longer a basic single-model spam classifier. It is now a layered Gmail spam and phishing detector with:
 
-### Key Learnings
+- extension-side Gmail extraction and UI overlays
+- backend-side whitelist, trusted-service, rules, benign-context, and ML layers
+- explanation output for predictions
+- user feedback capture and retraining
+- optional MySQL-backed feedback persistence
+- env-driven startup and deployment support
 
-#### Model Selection
-After experimenting with different approaches:
-1. **Logistic Regression** - Good baseline (75% accuracy)
-2. **Ensemble (Voting Classifier)** - Too complex, overfitting issues
-3. **MultinomialNB** - Final choice! Best for spam detection with TF-IDF
-   - Achieved 99.88% training accuracy
-   - Works well with text classification
-   - Faster inference than ensemble
+## Final Technical Direction
 
-#### Preprocessing Decisions
-- Used NLTK PorterStemmer for word normalization
-- TF-IDF with bigrams (1-2 grams) captures phrase patterns
-- Text truncation to 5000 chars prevents memory issues
-- Kept numbers and '$' in text (important for spam patterns)
+### Detection Stack
 
-#### UI/UX Evolution
-- Started with simple rotating PNG icon
-- Upgraded to animated SVG for modern look
-- Changed labels from "ham"/"spam" to "Not Spam"/"Spam" for clarity
-- Added multi-layer detection (whitelist, financial domains, keywords, ML)
+The backend classifies messages in this order:
 
-### Technical Decisions
+1. user whitelist
+2. trusted-service catalog
+3. phishing and spam rules
+4. benign-context guardrails
+5. ML model
 
-**Why 50% threshold?**
-- Lower threshold (0.75) gave too many false negatives
-- 50% provides better balance for real-world use
-- Combined with rule-based checks (whitelist, financial domains)
+That made the system more stable than relying on ML alone.
 
-**Why MultinomialNB over others?**
-- Native probability estimates (good for confidence scores)
-- Works well with TF-IDF features
-- Computationally efficient
-- Proven effective for spam classification
+### Model Design
 
-### Future Improvements
-- [ ] Add user feedback loop to retrain model
-- [ ] Implement API rate limiting
-- [ ] Add batch prediction endpoint
-- [ ] Create Firefox extension version
-- [ ] Add email signature detection
+The saved model is currently `LogisticRegression`, trained with:
 
-### Resources Used
-- scikit-learn documentation
-- NLTK stemming guide
-- FastAPI best practices
-- Chrome Extension Manifest V3 docs
+- word TF-IDF features
+- char TF-IDF features
+- phishing-oriented metadata features
 
----
+This keeps the classifier explainable while still performing well on the project dataset.
 
-**Note:** This project taught me the importance of:
-1. Proper class balancing in ML
-2. Iterative model selection
-3. Combining rule-based and ML approaches
-4. User-friendly UI design
+### Training Design
+
+Training now:
+
+- splits before fitting vectorizers to avoid leakage
+- evaluates on a clean holdout
+- retrains the selected estimator on the full dataset
+- can add reviewed feedback samples into training
+- records model and feedback metadata in `model_metadata.json`
+
+### Feedback Loop
+
+Reviewed predictions now feed the retraining pipeline through:
+
+- local JSONL storage by default
+- optional MySQL storage
+- `POST /retrain` from the backend
+- retrain controls in the extension options page
+
+## Engineering Changes That Mattered
+
+- shared preprocessing logic moved into `spam_detector_core.py`
+- API logic became testable and metadata-backed
+- feedback persistence was abstracted into `feedback_store.py`
+- runtime config moved to env-driven configuration in `runtime_config.py`
+- deployment startup moved to `run_server.py`
+- Docker and Compose files were added for reproducible backend startup
+
+## Current Verified Quality
+
+- backend tests: `15/15` passing
+- verifier scenarios: `6/6` passing
+- holdout accuracy: `0.9750`
+- spam F1: `0.9222`
+
+## Remaining Weak Points
+
+- the base dataset is still small and not very modern for real phishing
+- the extension has not been manually exercised in every Gmail layout edge case
+- retraining is user-triggered, not scheduled
+- the backend still has no authentication or multi-user model management
