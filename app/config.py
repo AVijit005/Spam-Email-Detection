@@ -5,8 +5,9 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-MODEL_DIR = Path(__file__).resolve().parent.parent / "model"
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_ROOT / "data"
+MODEL_DIR = PROJECT_ROOT / "model"
 
 
 class Settings(BaseSettings):
