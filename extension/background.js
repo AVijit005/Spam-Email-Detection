@@ -168,7 +168,7 @@ async function analyzeEmail(payload) {
         return cached;
     }
 
-    const prediction = await fetchJson("/predict", {
+    const prediction = await fetchJson("/v1/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(normalized)
@@ -198,7 +198,7 @@ async function submitFeedback(payload) {
 
 async function retrainModel() {
     const settings = await getSettings();
-    const response = await fetchJson("/retrain", {
+    const response = await fetchJson("/v1/retrain", {
         method: "POST",
         headers: { "Content-Type": "application/json" }
     }, {

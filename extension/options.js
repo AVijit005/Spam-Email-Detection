@@ -60,7 +60,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     elements.btnCheck.addEventListener("click", async () => {
         try {
             const health = await runtimeMessage({ command: "check_backend_health" });
-            setStatus(`Backend online (${health.feedback_backend}). Model: ${health.model_version}`);
+            setStatus(`Backend online (${health.feedback_backend}). Model: ${health.model_version}. /v1/health OK`);
         } catch (error) {
             setStatus(error.message || "Backend is unavailable.");
         }

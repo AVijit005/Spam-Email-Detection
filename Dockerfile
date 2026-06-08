@@ -12,4 +12,4 @@ COPY . /app
 
 EXPOSE 8000
 
-CMD ["python", "backend/run_server.py"]
+CMD ["python", "-m", "backend.app"]
