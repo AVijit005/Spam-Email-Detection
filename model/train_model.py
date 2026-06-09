@@ -20,7 +20,7 @@ from sklearn.model_selection import train_test_split
 
 
 CURRENT_DIR = Path(__file__).resolve().parent
-BACKEND_DIR = CURRENT_DIR.parent
+BACKEND_DIR = CURRENT_DIR.parent / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -34,8 +34,8 @@ from spam_detector_core import (
 )
 
 
-DATA_PATH = BACKEND_DIR / "data" / "spam.csv"
-FEEDBACK_PATH = BACKEND_DIR / "data" / "feedback.jsonl"
+DATA_PATH = CURRENT_DIR.parent / "data" / "spam.csv"
+FEEDBACK_PATH = CURRENT_DIR.parent / "data" / "feedback.jsonl"
 MODEL_PATH = CURRENT_DIR / "spam_model.pkl"
 VECTORIZER_PATH = CURRENT_DIR / "vectorizer.pkl"
 METADATA_PATH = CURRENT_DIR / "model_metadata.json"

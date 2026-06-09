@@ -1,6 +1,6 @@
 {
   "model_name": "LogisticRegression",
-  "trained_at_utc": "2026-04-03T15:06:25.310660+00:00",
+  "trained_at_utc": "2026-06-09T11:11:39.361562+00:00",
   "spam_threshold": 0.55,
   "data_leakage_fixed": true,
   "retrained_on_full_dataset": true,
@@ -44,7 +44,7 @@
     }
   ],
   "feedback_training": {
-    "feedback_backend": "mysql",
+    "feedback_backend": "file",
     "feedback_file_present": false,
     "feedback_lines_read": 0,
     "parsed_feedback_entries": 0,
