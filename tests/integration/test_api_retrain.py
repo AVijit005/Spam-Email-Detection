@@ -130,3 +130,31 @@ class TestApiRetrain(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["model_version"], "Retrained")
+
+    def test_retrain_returns_500_on_timeout(self):
+        import subprocess as subprocess_mod
+        with mock.patch("app.core.auth.settings") as mock_auth_settings, \
+             mock.patch("app.api.v1.retrain.subprocess") as mocked_subprocess:
+            mock_auth_settings.api_key = ""
+            mocked_subprocess.TimeoutExpired = subprocess_mod.TimeoutExpired
+            mocked_subprocess.run.side_effect = subprocess_mod.TimeoutExpired(
+                cmd=["python", "train_model.py"], timeout=900,
+                output=b"", stderr=b"",
+            )
+            with self._client() as client:
+                response = client.post("/v1/retrain")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("timed out", response.json()["detail"].lower())
+
+    def test_retrain_returns_500_on_subprocess_failure(self):
+        with mock.patch("app.core.auth.settings") as mock_auth_settings, \
+             mock.patch("app.api.v1.retrain.subprocess") as mocked_subprocess:
+            mock_auth_settings.api_key = ""
+            mock_result = mock.Mock(returncode=1, stdout="", stderr="Training error: insufficient data\n")
+            mocked_subprocess.run.return_value = mock_result
+            with self._client() as client:
+                response = client.post("/v1/retrain")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Training error", response.json()["detail"])

@@ -49,3 +49,31 @@ class TestApiCors(unittest.TestCase):
         with self._client(origin="http://localhost:3000") as client:
             response = client.get("/v1/health")
         self.assertEqual(response.status_code, 200)
+
+    def test_cors_blocks_put_method(self):
+        with self._client(origin="http://localhost:3000") as client:
+            response = client.put("/v1/health")
+        self.assertEqual(response.status_code, 405)
+
+    def test_cors_blocks_delete_method(self):
+        with self._client(origin="http://localhost:3000") as client:
+            response = client.delete("/v1/health")
+        self.assertEqual(response.status_code, 405)
+
+    def test_cors_preflight_blocks_put_method(self):
+        with self._client(
+            origin="http://localhost:3000",
+            **{"access-control-request-method": "PUT"},
+        ) as client:
+            response = client.options("/v1/health")
+        self.assertNotIn("PUT", response.headers.get("allow", ""))
+
+    def test_cors_does_not_expose_credentials_header(self):
+        with self._client(origin="http://localhost:3000") as client:
+            response = client.options("/v1/health")
+        self.assertNotIn("access-control-allow-credentials", response.headers)
+
+    def test_cors_blocks_chrome_extension_with_wrong_id(self):
+        with self._client(origin="chrome-extension://aaaa") as client:
+            response = client.get("/v1/health")
+        self.assertNotIn("access-control-allow-origin", response.headers)

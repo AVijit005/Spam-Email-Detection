@@ -8,8 +8,12 @@ from pathlib import Path
 from unittest import mock
 
 from app.storage.feedback import (
+    FeedbackStoreConfig,
     FeedbackStoreError,
     _TABLE_NAME_RE,
+    _append_feedback_mysql,
+    _feedback_summary_mysql,
+    _load_feedback_entries_mysql,
     append_feedback_entry,
     feedback_backend_name,
     feedback_summary,
@@ -186,3 +190,104 @@ class TestTableNameValidation(unittest.TestCase):
         self.assertIsNone(_TABLE_NAME_RE.fullmatch("feedback entries"))
         self.assertIsNone(_TABLE_NAME_RE.fullmatch("1feedback"))
         self.assertIsNone(_TABLE_NAME_RE.fullmatch(""))
+
+
+class TestFeedbackMysqlBackend(unittest.TestCase):
+    def setUp(self):
+        self.config = FeedbackStoreConfig(
+            backend="mysql", log_path=Path("/tmp/feedback.jsonl"),
+            host="127.0.0.1", port=3306, user="root",
+            password="", database="spam_test", table="feedback_entries",
+        )
+        self._pymysql_patch = mock.patch("pymysql.connect")
+        self.mock_connect = self._pymysql_patch.start()
+
+    def tearDown(self):
+        self._pymysql_patch.stop()
+
+    def _mock_cursor(self, fetchall_return=None, fetchone_return=None):
+        mock_conn = mock.MagicMock()
+        mock_cursor = mock.MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        if fetchall_return is not None:
+            mock_cursor.fetchall.return_value = fetchall_return
+        if fetchone_return is not None:
+            mock_cursor.fetchone.return_value = fetchone_return
+        self.mock_connect.return_value = mock_conn
+        return mock_conn, mock_cursor
+
+    def test_append_feedback_mysql_creates_table_and_inserts(self):
+        mock_conn, mock_cursor = self._mock_cursor()
+        payload = {
+            "feedback_id": "fb-001", "prediction_id": "pred-001",
+            "stored_at_utc": "2026-04-03T10:00:00+00:00",
+            "sender": "spam@example.com", "subject": "Test", "body": "Test body",
+            "predicted_label": "Spam", "predicted_confidence": 0.95,
+            "user_label": "Spam", "verdict": "correct",
+            "notes": "", "source": "unit_test", "model_version": "v1",
+        }
+        _append_feedback_mysql(payload, self.config)
+        self.assertEqual(mock_cursor.execute.call_count, 2)
+        self.assertIn("CREATE TABLE", mock_cursor.execute.call_args_list[0][0][0])
+        mock_conn.close.assert_called_once()
+
+    def test_load_feedback_entries_mysql(self):
+        rows = [
+            {"feedback_id": "1", "verdict": "correct", "stored_at_utc": "2026-01-01"},
+            {"feedback_id": "2", "verdict": "false_positive", "stored_at_utc": "2026-01-02"},
+        ]
+        mock_conn, mock_cursor = self._mock_cursor(fetchall_return=rows)
+        entries = _load_feedback_entries_mysql(self.config)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["feedback_id"], "1")
+        mock_conn.close.assert_called_once()
+
+    def test_load_feedback_entries_mysql_empty(self):
+        mock_conn, mock_cursor = self._mock_cursor(fetchall_return=[])
+        entries = _load_feedback_entries_mysql(self.config)
+        self.assertEqual(entries, [])
+        mock_conn.close.assert_called_once()
+
+    def test_feedback_summary_mysql(self):
+        mock_conn, mock_cursor = self._mock_cursor(
+            fetchone_return={"count": 5},
+            fetchall_return=[
+                {"verdict": "correct", "count": 3},
+                {"verdict": "false_positive", "count": 1},
+                {"verdict": "false_negative", "count": 1},
+            ],
+        )
+        summary = _feedback_summary_mysql(self.config)
+        self.assertEqual(summary["feedback_count"], 5)
+        self.assertEqual(summary["verdict_counts"]["correct"], 3)
+        self.assertEqual(summary["verdict_counts"]["false_positive"], 1)
+        self.assertEqual(summary["verdict_counts"]["false_negative"], 1)
+        mock_conn.close.assert_called_once()
+
+    def test_feedback_summary_mysql_empty(self):
+        mock_conn, mock_cursor = self._mock_cursor(
+            fetchone_return={"count": 0},
+            fetchall_return=[],
+        )
+        summary = _feedback_summary_mysql(self.config)
+        self.assertEqual(summary["feedback_count"], 0)
+        self.assertEqual(summary["verdict_counts"]["correct"], 0)
+        mock_conn.close.assert_called_once()
+
+    def test_append_feedback_routes_to_mysql_when_configured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "feedback.jsonl"
+            with mock.patch.dict(os.environ, {
+                "SPAM_DB_HOST": "127.0.0.1", "SPAM_DB_USER": "root",
+                "SPAM_DB_NAME": "spam_test",
+            }, clear=True):
+                mock_conn, mock_cursor = self._mock_cursor()
+                payload = {
+                    "feedback_id": "fb-x", "prediction_id": "p-x",
+                    "stored_at_utc": "2026-01-01T00:00:00+00:00",
+                    "predicted_label": "Spam", "user_label": "Spam",
+                    "verdict": "correct", "source": "test",
+                }
+                append_feedback_entry(payload, log_path)
+            self.assertGreater(mock_cursor.execute.call_count, 0)
+            mock_conn.close.assert_called_once()
