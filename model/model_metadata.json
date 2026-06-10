@@ -1,6 +1,6 @@
 {
   "model_name": "LogisticRegression",
-  "trained_at_utc": "2026-06-09T11:11:39.361562+00:00",
+  "trained_at_utc": "2026-06-10T07:52:54.988661+00:00",
   "spam_threshold": 0.55,
   "data_leakage_fixed": true,
   "retrained_on_full_dataset": true,

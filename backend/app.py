@@ -19,7 +19,7 @@ from runtime_config import load_runtime_config
 from spam_detector_core import DEFAULT_SPAM_THRESHOLD, load_domain_catalog, load_user_whitelist, predict_email
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "model"
 DATA_DIR = BASE_DIR / "data"
 

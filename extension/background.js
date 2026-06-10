@@ -183,11 +183,11 @@ async function analyzeEmail(payload) {
 }
 
 async function checkBackendHealth() {
-    return fetchJson("/health");
+    return fetchJson("/v1/health");
 }
 
 async function submitFeedback(payload) {
-    const response = await fetchJson("/feedback", {
+    const response = await fetchJson("/v1/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)

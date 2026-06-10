@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import settings
+from app.core.auth import require_auth
 from app.schemas.feedback import FeedbackRequest, FeedbackResponse, FeedbackSummaryResponse
 from app.storage.feedback import FeedbackStoreError, append_feedback_entry, feedback_summary
 
@@ -43,7 +44,7 @@ def feedback_summary_endpoint() -> FeedbackSummaryResponse:
     return FeedbackSummaryResponse(**summary)
 
 
-@router.post("/feedback", response_model=FeedbackResponse)
+@router.post("/feedback", response_model=FeedbackResponse, dependencies=[require_auth])
 def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     try:
         normalized_user_label = _normalize_user_label(request.user_label)

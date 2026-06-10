@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_TABLE_NAME = "feedback_entries"
+_TABLE_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class FeedbackStoreError(RuntimeError):
@@ -43,6 +45,8 @@ def resolve_feedback_store(log_path: str | Path) -> FeedbackStoreConfig:
     password = _env_first("SPAM_DB_PASSWORD", "MYSQL_PASSWORD")
     database = _env_first("SPAM_DB_NAME", "SPAM_DB_DATABASE", "MYSQL_DATABASE")
     table = _env_first("SPAM_DB_TABLE", "MYSQL_TABLE", default=DEFAULT_TABLE_NAME)
+    if not _TABLE_NAME_RE.fullmatch(table):
+        raise FeedbackStoreError(f"Invalid table name: {table!r}. Must match '^[a-zA-Z_][a-zA-Z0-9_]*$'.")
     try:
         port = int(port_text)
     except ValueError as error:

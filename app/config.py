@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
 
     allow_origin_regex: str = (
-        r"^(chrome-extension://.*|moz-extension://.*|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?)$"
+        r"^(chrome-extension://[a-z]{32,64}|moz-extension://[a-z0-9-]{8,64}|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?)$"
     )
 
     train_on_start: bool = False
@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 15
+
+    api_key: str = ""
 
 
 settings = Settings()

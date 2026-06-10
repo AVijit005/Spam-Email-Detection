@@ -4,13 +4,13 @@ from pydantic import BaseModel, Field
 
 
 class EmailRequest(BaseModel):
-    sender: str = Field(default="")
-    subject: str = Field(default="")
-    body: str = Field(default="")
+    sender: str = Field(default="", max_length=320)
+    subject: str = Field(default="", max_length=998)
+    body: str = Field(default="", max_length=100_000)
 
 
 class BatchPredictionRequest(BaseModel):
-    emails: list[EmailRequest]
+    emails: list[EmailRequest] = Field(default_factory=list, max_length=50)
 
 
 class PredictionResponse(BaseModel):

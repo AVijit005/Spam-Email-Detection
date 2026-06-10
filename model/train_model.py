@@ -390,6 +390,8 @@ def train() -> dict[str, Any]:
     with VECTORIZER_PATH.open("wb") as vectorizer_handle:
         pickle.dump(vectorizer_bundle, vectorizer_handle)
 
+    (MODEL_PATH.parent / (MODEL_PATH.name + ".sha256")).write_text(hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest())
+    (VECTORIZER_PATH.parent / (VECTORIZER_PATH.name + ".sha256")).write_text(hashlib.sha256(VECTORIZER_PATH.read_bytes()).hexdigest())
     full_label_counts = full_training_df["label"].value_counts().to_dict()
     metadata = {
         "model_name": best_model_name,

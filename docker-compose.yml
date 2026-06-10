@@ -21,8 +21,8 @@ services:
       SPAM_DB_NAME: ${SPAM_DB_NAME:-}
       SPAM_DB_TABLE: ${SPAM_DB_TABLE:-feedback_entries}
     volumes:
-      - ./backend/data:/app/backend/data
-      - ./backend/model:/app/backend/model
+      - ./data:/app/data
+      - ./model:/app/model
     restart: unless-stopped
 
   mysql:
@@ -31,13 +31,13 @@ services:
     profiles: ["mysql"]
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-spam_detector}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     ports:
       - "${MYSQL_PORT_FORWARD:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10

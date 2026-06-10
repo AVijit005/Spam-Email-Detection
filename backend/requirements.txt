@@ -1,5 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
+gunicorn
 scikit-learn
 pandas
 joblib
@@ -8,3 +9,5 @@ numpy
 scipy
 httpx
 PyMySQL
+pydantic-settings
+slowapi

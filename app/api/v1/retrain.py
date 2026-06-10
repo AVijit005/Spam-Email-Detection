@@ -4,9 +4,10 @@ import subprocess
 import sys
 import threading
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import settings
+from app.core.auth import require_auth
 from app.schemas.retrain import RetrainResponse
 from app.storage.feedback import feedback_backend_name
 
@@ -16,7 +17,7 @@ model_metadata: dict = {}
 RETRAIN_LOCK = threading.Lock()
 
 
-@router.post("/retrain", response_model=RetrainResponse)
+@router.post("/retrain", response_model=RetrainResponse, dependencies=[require_auth])
 def retrain_model() -> RetrainResponse:
     if not RETRAIN_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Retraining is already in progress.")
@@ -34,6 +35,8 @@ def retrain_model() -> RetrainResponse:
             output_lines.extend(line for line in (result.stdout or "").splitlines() if line.strip())
             detail = "\n".join(output_lines[-12:]) if output_lines else "Retraining failed."
             raise HTTPException(status_code=500, detail=detail)
+        from app.main import load_resources
+        load_resources()
         training_info = model_metadata.get("feedback_training", {})
         selected_metrics = model_metadata.get("selected_metrics", {})
         spam_f1 = selected_metrics.get("spam_f1")

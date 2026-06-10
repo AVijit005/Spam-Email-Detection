@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
-import pickle
+import logging
 from contextlib import asynccontextmanager
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.api.v1.router import v1_router
 from app.config import settings
 from app.core.domain import load_domain_catalog, load_user_whitelist
+from app.ml.registry import load_model
 from app.api.v1 import health as health_mod
 from app.api.v1 import predict as predict_mod
 from app.api.v1 import feedback as feedback_mod
@@ -24,14 +30,17 @@ def load_resources() -> None:
 
     model = None
     vectorizer = None
-    if settings.model_path.exists() and settings.vectorizer_path.exists():
-        with open(settings.model_path, "rb") as f:
-            model = pickle.load(f)
-        with open(settings.vectorizer_path, "rb") as f:
-            vectorizer = pickle.load(f)
+    artifact = load_model(settings.model_path, settings.vectorizer_path, settings.metadata_path)
+    if artifact is not None:
+        model = artifact.model
+        vectorizer = artifact.vectorizer
+        metadata = artifact.metadata
 
     whitelist = load_user_whitelist(settings.whitelist_path)
     trusted = load_domain_catalog(settings.trusted_domains_path)
+
+    if model is None or vectorizer is None:
+        logger.warning("Model or vectorizer not found at startup. Predict will return 500.")
 
     health_mod.model = model
     health_mod.vectorizer = vectorizer
@@ -56,7 +65,10 @@ async def lifespan(_: FastAPI):
 
 
 def create_app() -> FastAPI:
+    limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
     app = FastAPI(title="Spam Detector API", version="3.0.0", lifespan=lifespan)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -73,5 +85,13 @@ app = create_app()
 
 
 if __name__ == "__main__":
+    import signal
     import uvicorn
+
+    def _shutdown_handler(signum, frame):
+        logger.info("Received shutdown signal %s, stopping...", signum)
+
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    signal.signal(signal.SIGINT, _shutdown_handler)
+
     uvicorn.run(app, host=settings.api_host, port=settings.api_port, log_level=settings.log_level)
