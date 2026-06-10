@@ -11,7 +11,7 @@ The backend is a FastAPI service that:
 
 ## Core Files
 
-- `app.py`: API routes and runtime wiring
+- `app.py.legacy`: Archived legacy API module (replaced by `app/main.py` in production)
 - `feedback_store.py`: JSONL/MySQL feedback persistence
 - `run_server.py`: deployment-friendly startup entrypoint
 - `runtime_config.py`: env-driven runtime configuration

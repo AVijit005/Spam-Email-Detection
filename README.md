@@ -34,7 +34,7 @@ sic-final-project/
 │   ├── model/
 │   │   └── train_model.py
 │   ├── tests/
-│   ├── app.py
+│   ├── app.py.legacy
 │   ├── feedback_store.py
 │   ├── run_server.py
 │   ├── runtime_config.py

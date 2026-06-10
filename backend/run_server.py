@@ -6,40 +6,39 @@ from pathlib import Path
 
 import uvicorn
 
-from app import MODEL_PATH, TRAIN_MODEL_PATH, VECTORIZER_PATH, app
-from runtime_config import load_runtime_config
+from app.config import settings
+from app.main import app
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def ensure_model_artifacts() -> None:
-    config = load_runtime_config()
-    should_train = config.train_on_start or (
-        config.bootstrap_model_if_missing and not (MODEL_PATH.exists() and VECTORIZER_PATH.exists())
+    should_train = settings.train_on_start or (
+        settings.bootstrap_model_if_missing
+        and not (settings.model_path.exists() and settings.vectorizer_path.exists())
     )
 
     if not should_train:
         return
 
     result = subprocess.run(
-        [sys.executable, str(TRAIN_MODEL_PATH)],
-        cwd=str(BASE_DIR.parent),
+        [sys.executable, str(settings.train_script_path)],
+        cwd=str(BASE_DIR),
         check=False,
-        timeout=config.retrain_timeout_seconds,
+        timeout=settings.retrain_timeout_seconds,
     )
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 
 
 def main() -> None:
-    config = load_runtime_config()
     ensure_model_artifacts()
     uvicorn.run(
         app,
-        host=config.api_host,
-        port=config.api_port,
-        log_level=config.log_level,
+        host=settings.api_host,
+        port=settings.api_port,
+        log_level=settings.log_level,
     )
 
 

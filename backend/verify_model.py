@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 import sys
 from pathlib import Path
 
@@ -11,6 +10,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 from spam_detector_core import DEFAULT_SPAM_THRESHOLD, load_domain_catalog, load_user_whitelist, predict_email
+from app.ml.registry import load_model, ModelIntegrityError
 
 
 MODEL_PATH = CURRENT_DIR / "model" / "spam_model.pkl"
@@ -60,14 +60,6 @@ TEST_CASES = [
 ]
 
 
-def load_metadata() -> dict:
-    if not METADATA_PATH.exists():
-        return {}
-
-    with METADATA_PATH.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
 def verify() -> int:
     print("=" * 60)
     print("  Spam Detector - Verification")
@@ -78,12 +70,16 @@ def verify() -> int:
         print("Run: python backend/model/train_model.py")
         return 1
 
-    with MODEL_PATH.open("rb") as model_handle:
-        model = pickle.load(model_handle)
-    with VECTORIZER_PATH.open("rb") as vectorizer_handle:
-        vectorizer = pickle.load(vectorizer_handle)
+    try:
+        artifact = load_model(MODEL_PATH, VECTORIZER_PATH, METADATA_PATH)
+    except ModelIntegrityError as exc:
+        print(f"Integrity check failed: {exc}")
+        return 1
+    if artifact is None:
+        print("Failed to load model artefacts.")
+        return 1
 
-    metadata = load_metadata()
+    metadata = artifact.metadata
     model_version = str(metadata.get("model_name", "unknown"))
     spam_threshold = float(metadata.get("spam_threshold", DEFAULT_SPAM_THRESHOLD))
     whitelist_domains = load_user_whitelist(USER_WHITELIST_PATH)
@@ -98,8 +94,8 @@ def verify() -> int:
     passed = 0
     for case in TEST_CASES:
         result = predict_email(
-            model=model,
-            vectorizer=vectorizer,
+            model=artifact.model,
+            vectorizer=artifact.vectorizer,
             sender=case["sender"],
             subject=case["subject"],
             body=case["body"],

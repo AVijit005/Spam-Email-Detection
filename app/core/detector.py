@@ -14,6 +14,7 @@ from app.core.explain import explain_prediction
 from app.core.features import compose_email_text, extract_meta_features
 from app.core.rules import BenignAssessment, RuleAssessment, assess_benign_email, assess_rule_based_spam, is_trusted_service_domain
 from app.core.text import preprocess_text
+from app.utils.pii import redact_email_body, redact_subject
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,8 @@ def predict_email(
     model_version: str = "unknown", spam_threshold: float = DEFAULT_SPAM_THRESHOLD,
 ) -> PredictionResult:
     sender_domain = extract_sender_domain(sender)
+    subject = redact_subject(subject)
+    body = redact_email_body(body)
     whitelisted = set(whitelist_domains or ())
 
     if sender_domain and sender_domain in whitelisted:

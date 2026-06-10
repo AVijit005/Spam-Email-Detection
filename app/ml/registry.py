@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import pickle
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ def _compute_hash(path: Path) -> str:
 
 def _verify_hash(path: Path, expected: str) -> None:
     actual = _compute_hash(path)
-    if not hashlib.compare_digest(actual, expected):
+    if not hmac.compare_digest(actual, expected):
         raise ModelIntegrityError(
             f"SHA-256 mismatch for {path.name}: integrity check failed."
         )

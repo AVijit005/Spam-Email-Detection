@@ -8,6 +8,7 @@ from app.config import settings
 from app.core.auth import require_auth
 from app.schemas.feedback import FeedbackRequest, FeedbackResponse, FeedbackSummaryResponse
 from app.storage.feedback import FeedbackStoreError, append_feedback_entry, feedback_summary
+from app.utils.pii import redact_email_body, redact_subject
 
 router = APIRouter()
 
@@ -53,10 +54,12 @@ def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
         raise HTTPException(status_code=400, detail=str(error)) from error
     stored_at_utc = datetime.now(timezone.utc).isoformat()
     feedback_id = f"fb_{request.prediction_id}_{stored_at_utc.replace(':', '').replace('-', '')}"
+    redacted_subject = redact_subject(request.subject)
+    redacted_body = redact_email_body(request.body)
     entry = {
         "feedback_id": feedback_id, "prediction_id": request.prediction_id,
         "stored_at_utc": stored_at_utc, "sender": request.sender,
-        "subject": request.subject, "body": request.body,
+        "subject": redacted_subject, "body": redacted_body,
         "predicted_label": request.predicted_label,
         "predicted_confidence": request.predicted_confidence,
         "user_label": normalized_user_label, "verdict": verdict,
