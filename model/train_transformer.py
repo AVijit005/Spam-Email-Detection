@@ -42,7 +42,7 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model.shared import EvalMetrics, score_model, ram_report
+from model.shared import EvalMetrics, ram_report
 
 BATCH_SIZE = 16
 GRADIENT_ACCUMULATION_STEPS = 4  # effective batch = 64
@@ -104,6 +104,125 @@ def _device() -> torch.device:
     if importlib.util.find_spec("torch_directml") is not None:
         return torch.device("directml")
     return torch.device("cpu")
+
+
+def _detect_environment() -> str:
+    if os.getenv("KAGGLE_KERNEL_RUN_TYPE") or os.path.isdir("/kaggle"):
+        if os.getenv("KAGGLE_KERNEL_RUN_TYPE") == "Interactive":
+            return "online"
+        return "kaggle"
+    if os.getenv("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"):
+        return "cached"
+    if os.getenv("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes"):
+        return "cached"
+    return "online"
+
+
+def _resolve_cache_dir() -> Path:
+    env_cache = os.getenv("TRANSFORMERS_CACHE")
+    if env_cache:
+        return Path(env_cache)
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    xdg = os.getenv("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "huggingface" / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _model_cached_locally(model_id: str) -> bool:
+    cache_dir = _resolve_cache_dir()
+    model_dir = cache_dir / ("models--" + model_id.replace("/", "--"))
+    if not model_dir.is_dir():
+        return False
+    if (model_dir / "refs" / "main").exists():
+        return True
+    snapshots = model_dir / "snapshots"
+    if snapshots.is_dir() and any(snapshots.iterdir()):
+        return True
+    return False
+
+
+def _download_model_if_needed(model_id: str, env: str) -> None:
+    if env != "online":
+        return
+    if _model_cached_locally(model_id):
+        return
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download(model_id, resume_download=True)
+    except ImportError:
+        pass
+
+
+def _load_transformer_assets(
+    config: TransformerConfig,
+    env: str,
+) -> tuple:
+    device = _device()
+    model_id = config.model_id
+    cache_dir = str(_resolve_cache_dir())
+
+    if env == "online":
+        if not _model_cached_locally(model_id):
+            print(f"  Downloading {model_id} from HuggingFace Hub...")
+            _download_model_if_needed(model_id, env)
+        else:
+            print(f"  Found {model_id} in cache — using local copy")
+
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True, cache_dir=cache_dir)
+            hf_config = AutoConfig.from_pretrained(model_id, num_labels=2, cache_dir=cache_dir)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_id, num_labels=2, ignore_mismatched_sizes=True, cache_dir=cache_dir,
+            )
+        except OSError as e:
+            if not _model_cached_locally(model_id):
+                raise OSError(
+                    f"Failed to download {model_id}. Network unavailable and model not cached.\n"
+                    f"  Solutions:\n"
+                    f"  1. Set HF_HUB_OFFLINE=1 and pre-download the model\n"
+                    f"  2. On Kaggle: download in an Interactive notebook first, then submit\n"
+                    f"  3. Use --track-a-only for classical ML (no download needed)"
+                ) from e
+            print(f"  Download failed — falling back to cached {model_id}")
+            tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True, local_files_only=True, cache_dir=cache_dir)
+            hf_config = AutoConfig.from_pretrained(model_id, num_labels=2, local_files_only=True, cache_dir=cache_dir)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_id, num_labels=2, ignore_mismatched_sizes=True, local_files_only=True, cache_dir=cache_dir,
+            )
+
+    elif env in ("cached", "kaggle"):
+        local_kwargs = {"local_files_only": True, "cache_dir": cache_dir}
+        if not _model_cached_locally(model_id):
+            env_label = "Kaggle" if env == "kaggle" else "offline"
+            raise FileNotFoundError(
+                f"Model {model_id} not found in cache and {env_label} mode disables downloads.\n"
+                f"  Expected: {_resolve_cache_dir() / ('models--' + model_id.replace('/', '--'))}\n"
+                f"  Solutions:\n"
+                f"  1. Pre-download on a machine with internet:\n"
+                f"     python -c \"from transformers import AutoModelForSequenceClassification;\\\n"
+                f"        AutoModelForSequenceClassification.from_pretrained('{model_id}')\"\n"
+                f"  2. On Kaggle: run in Interactive mode first to cache the model\n"
+                f"  3. Set TRANSFORMERS_CACHE to point to pre-downloaded models\n"
+                f"  4. Use --track-a-only for classical ML (no download needed)"
+            )
+        print(f"  Loading {model_id} from local cache (offline mode)")
+        tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True, **local_kwargs)
+        hf_config = AutoConfig.from_pretrained(model_id, num_labels=2, **local_kwargs)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_id, num_labels=2, ignore_mismatched_sizes=True, **local_kwargs,
+        )
+
+    else:
+        raise ValueError(f"Unknown environment: {env}")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model.to(device)
+    return tokenizer, hf_config, model, device
 
 
 class EmailDataset(Dataset):
@@ -315,9 +434,12 @@ def train_transformer(
         print("  FAST DEV RUN — 500 samples only")
     print("=" * 60)
 
-    device = _device()
+    env = _detect_environment()
+    tokenizer, hf_config, model, device = _load_transformer_assets(config, env)
     print(f"  Device: {device}")
     print(f"  FP16: {config.fp16 and device.type == 'cuda'}")
+    if env != "online":
+        print(f"  Env: {env} — offline, using cached model only")
 
     if config.fast_dev_run:
         train_df = train_df.sample(n=min(500, len(train_df)), random_state=42)
@@ -327,10 +449,6 @@ def train_transformer(
     test_texts = test_df["message"].tolist()
     y_train = train_df["label"].values
     y_test = test_df["label"].values
-
-    tokenizer = AutoTokenizer.from_pretrained(config.model_id, use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     train_dataset = EmailDataset(train_texts, y_train, tokenizer, config.max_length)
     test_dataset = EmailDataset(test_texts, y_test, tokenizer, config.max_length)
@@ -346,13 +464,8 @@ def train_transformer(
 
     print(f"  Train batches: {len(train_loader)} (effective batch={config.batch_size * config.gradient_accumulation_steps})")
     print(f"  Test batches:  {len(test_loader)}")
-    print(f"  Total params:  {AutoConfig.from_pretrained(config.model_id).num_hidden_layers} layers")
+    print(f"  Total layers:  {hf_config.num_hidden_layers}")
     print(ram_report("Before model load"))
-
-    model = AutoModelForSequenceClassification.from_pretrained(
-        config.model_id, num_labels=2, ignore_mismatched_sizes=True,
-    )
-    model.to(device)
     print(ram_report("After model load"))
 
     criterion = FocalLoss(alpha=config.focal_alpha, gamma=config.focal_gamma, reduction="mean")

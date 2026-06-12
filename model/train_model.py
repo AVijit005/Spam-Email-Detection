@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -72,19 +73,63 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _detect_kaggle_input_dir() -> Path | None:
+    kaggle_input = os.environ.get("KAGGLE_INPUT_DIR")
+    if kaggle_input:
+        return Path(kaggle_input)
+    kaggle_root = Path("/kaggle/input")
+    if kaggle_root.is_dir():
+        return kaggle_root
+    return None
+
+
 def _discover_csv() -> Path:
-    candidates = [
-        Path("data/spam.csv"),
-        Path("D:/Spam-Email-Detection/data/spam.csv"),
-    ]
+    candidates: list[Path] = []
+
+    kaggle_input = _detect_kaggle_input_dir()
+    if kaggle_input is not None:
+        for entry in sorted(kaggle_input.iterdir()):
+            if entry.is_dir():
+                for f in sorted(entry.iterdir()):
+                    if f.suffix == ".csv":
+                        candidates.append(f)
+            elif entry.suffix == ".csv":
+                candidates.append(entry)
+
+    project_relative = PROJECT_ROOT / "data" / "spam.csv"
+    candidates.append(project_relative)
+
+    cwd_relative = Path.cwd() / "data" / "spam.csv"
+    if cwd_relative != project_relative:
+        candidates.append(cwd_relative)
+
+    cwd_direct = Path.cwd() / "spam.csv"
+    candidates.append(cwd_direct)
+
     for cand in candidates:
         if cand.exists():
             return cand
-    if PROJECT_ROOT.exists():
-        csv_path = PROJECT_ROOT / "data" / "spam.csv"
-        if csv_path.exists():
-            return csv_path
-    raise FileNotFoundError("spam.csv not found.")
+
+    kaggle_hint = ""
+    if kaggle_input is not None:
+        kaggle_hint = (
+            f"\n  Kaggle detected. Dataset contents at {kaggle_input}:\n"
+            + "".join(f"    {p}\n" for p in sorted(kaggle_input.rglob("*")) if p.is_file())
+            + "\n"
+            f"  Use --csv-path with the path above, e.g.:\n"
+            f"    --csv-path {kaggle_input}/spam-dataset/spam.csv"
+        )
+
+    raise FileNotFoundError(
+        f"spam.csv not found.\n"
+        f"  Searched:\n"
+        + "".join(f"    {c}\n" for c in candidates)
+        + kaggle_hint
+        + f"\n  Fix:\n"
+        f"  1. Pass --csv-path <path>        → explicit override\n"
+        f"  2. Place spam.csv at data/spam.csv  → project-relative\n"
+        f"  3. Set KAGGLE_INPUT_DIR=<dir>    → Kaggle input mount"
+    )
 
 
 def load_and_preprocess(csv_path: Path, fast_dev: bool = False) -> pd.DataFrame:
