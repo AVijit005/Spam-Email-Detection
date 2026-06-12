@@ -12,21 +12,16 @@ import pickle
 import time
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
-import scipy.sparse as sp
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.metrics import (
-    accuracy_score,
     classification_report,
     confusion_matrix,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
 
 MODEL_DIR = Path(__file__).resolve().parent
 

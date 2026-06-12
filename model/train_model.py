@@ -178,7 +178,8 @@ def train(*, run_track_a: bool = True, run_track_b: bool = False,
         from model.train_transformer import retrain_on_full_dataset, TRANSFORMER_MODELS
         winner_hf = TRANSFORMER_MODELS.get(best_model.model_name, "distilbert/distilbert-base-uncased")
         best_model = retrain_on_full_dataset(
-            winner_hf, full_train_df["message"].tolist(), y_all, device=device,
+            winner_hf, full_train_df["message"].tolist(), y_all,
+            winner_wrapper=best_model, device=device,
         )
         best_vectorizer_bundle["tokenizer"] = best_model.tokenizer
         retrained_on_full = True
