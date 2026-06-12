@@ -13,7 +13,7 @@ import numpy as np
 
 
 class DummyModel:
-    coef_ = np.array([[0.1] * 18])
+    coef_ = np.array([[0.1] * 34])
     def predict_proba(self, features):
         return np.array([[0.12, 0.88]], dtype=np.float32)
 

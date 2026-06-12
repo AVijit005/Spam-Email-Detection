@@ -1,7 +1,10 @@
-"""Shared training infrastructure — dataset, holdout, evaluation, artifact I/O.
+"""Shared training infrastructure — metrics, leaderboard, artifact I/O, optional 5-fold CV evaluation.
 
-Used by both Track A (classical ML) and Track B (transformers) to ensure
-identical data splits, identical metrics, and artifact compatibility.
+Used by Track A (classical) and Track B (transformer) to ensure identical
+data splits, identical metrics, and artifact compatibility.
+
+Cross-validation: Stored in shared.py, used by train_classical.py for
+classical model evaluation and OOF prediction generation.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ import json
 import pickle
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +57,7 @@ class EvalMetrics:
     model_size_bytes: int = 0
     converged: bool = True
     effective_iterations: int | None = None
+    eval_method: str = "holdout"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +73,7 @@ class EvalMetrics:
             "converged": self.converged,
             "effective_iterations": self.effective_iterations,
             "model_size_bytes": self.model_size_bytes,
+            "eval_method": self.eval_method,
         }
 
 
@@ -145,12 +150,12 @@ def score_model(
 
 
 def print_leaderboard(all_metrics: list[EvalMetrics], title: str = "LEADERBOARD") -> None:
-    print(f"\n{'=' * 90}")
+    print(f"\n{'=' * 95}")
     print(f"  {title}")
-    print(f"{'=' * 90}")
-    header = f"{'Track':<14s} {'Model':<26s} {'F1':>7s} {'Prec':>7s} {'Recall':>7s} {'ROC-AUC':>8s} {'Time':>8s} {'Size':>7s}"
+    print(f"{'=' * 95}")
+    header = f"{'Track':<14s} {'Model':<28s} {'F1':>7s} {'Prec':>7s} {'Recall':>7s} {'ROC-AUC':>8s} {'Time':>8s} {'CV':>6s}"
     print(header)
-    print("-" * 90)
+    print("-" * 95)
 
     sorted_metrics = sorted(all_metrics, key=lambda e: e.spam_f1, reverse=True)
     best_overall_f1 = sorted_metrics[0].spam_f1 if sorted_metrics else 0.0
@@ -161,17 +166,17 @@ def print_leaderboard(all_metrics: list[EvalMetrics], title: str = "LEADERBOARD"
         rec_s = f"{m.spam_recall:.4f}"
         roc_s = f"{m.roc_auc:.4f}" if m.roc_auc else "N/A"
         t_s = f"{m.train_time_seconds:.0f}s"
-        sz_s = f"{m.model_size_bytes / 1024:.0f}KB" if m.model_size_bytes else "?"
+        cv_s = m.eval_method
         mark = ">" if m.spam_f1 == best_overall_f1 else " "
         track_icon = "A" if m.track == "classical" else "B"
-        print(f"{mark}Track {track_icon:<10s} {m.model_name:<26s} {f1_s:>7s} {prec_s:>7s} {rec_s:>7s} {roc_s:>8s} {t_s:>8s} {sz_s:>7s}")
-    print("=" * 90)
+        print(f"{mark}Track {track_icon:<10s} {m.model_name:<28s} {f1_s:>7s} {prec_s:>7s} {rec_s:>7s} {roc_s:>8s} {t_s:>8s} {cv_s:>6s}")
+    print("=" * 95)
 
 
 def print_cross_track_summary(track_a: EvalMetrics | None, track_b: EvalMetrics | None) -> None:
-    print(f"\n{'=' * 90}")
+    print(f"\n{'=' * 95}")
     print("  CROSS-TRACK COMPARISON")
-    print(f"{'=' * 90}")
+    print(f"{'=' * 95}")
     if track_a:
         print(f"  Track A Best (Classical): {track_a.model_name} → Spam F1 = {track_a.spam_f1:.4f}  @ {track_a.train_time_seconds:.0f}s")
     if track_b:
@@ -182,7 +187,7 @@ def print_cross_track_summary(track_a: EvalMetrics | None, track_b: EvalMetrics 
         if track_b.model_size_bytes and track_a.model_size_bytes:
             size_ratio = track_b.model_size_bytes / max(track_a.model_size_bytes, 1)
             print(f"  Size ratio (B / A): {size_ratio:.1f}x")
-    print("=" * 90)
+    print("=" * 95)
 
 
 def save_artifacts(

@@ -1,11 +1,13 @@
 """Track A — Production Classical ML Pipeline.
 
-TF-IDF + Linear/Tree/NN candidates. Evaluates on the shared holdout split.
+TF-IDF + tree/linear/neural candidates. Evaluates on the shared holdout split.
+Supports optional 5-fold stratified cross-validation for robust model comparison.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +16,8 @@ import pandas as pd
 import scipy.sparse as sp
 from sklearn.base import clone
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression, SGDClassifier
-from sklearn.naive_bayes import ComplementNB
+from sklearn.linear_model import SGDClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.svm import LinearSVC
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
@@ -28,15 +28,17 @@ from app.core.constants import META_FEATURE_NAMES
 from app.core.features import extract_meta_features
 from model.shared import EvalMetrics, score_model, ram_report
 
-WORD_MAX_FEATURES = 35000
-WORD_MIN_DF = 20
+WORD_MAX_FEATURES = 25000
+WORD_MIN_DF = 30
 WORD_MAX_DF = 0.70
 WORD_NGRAM = (1, 2)
 
-
-COMPETITION_WORD_MAX_FEATURES = 50000
-COMPETITION_WORD_MIN_DF = 10
+COMPETITION_WORD_MAX_FEATURES = 40000
+COMPETITION_WORD_MIN_DF = 15
 COMPETITION_WORD_MAX_DF = 0.60
+
+OPTUNA_TRIALS = 30
+OPTUNA_TIMEOUT_SECONDS = 1800
 
 
 def create_word_vectorizer(competition: bool = False) -> TfidfVectorizer:
@@ -47,6 +49,7 @@ def create_word_vectorizer(competition: bool = False) -> TfidfVectorizer:
             sublinear_tf=True,
             min_df=COMPETITION_WORD_MIN_DF,
             max_df=COMPETITION_WORD_MAX_DF,
+            dtype=np.float32,
         )
     return TfidfVectorizer(
         max_features=WORD_MAX_FEATURES,
@@ -54,6 +57,7 @@ def create_word_vectorizer(competition: bool = False) -> TfidfVectorizer:
         sublinear_tf=True,
         min_df=WORD_MIN_DF,
         max_df=WORD_MAX_DF,
+        dtype=np.float32,
     )
 
 
@@ -80,28 +84,111 @@ def build_classical_features(
     return x_train, x_test, y_train, y_test, sample_weight_train
 
 
-def build_candidates(competition: bool = False) -> dict[str, Any]:
+def _optimize_xgboost(
+    x_train: sp.csr_matrix,
+    y_train: np.ndarray,
+    sw_train: np.ndarray,
+) -> dict[str, Any]:
+    try:
+        import xgboost as xgb
+        import optuna
+    except ImportError:
+        return {"n_estimators": 500, "max_depth": 10, "learning_rate": 0.05,
+                "subsample": 0.8, "colsample_bytree": 0.6}
+
+    def objective(trial):
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 200, 800),
+            "max_depth": trial.suggest_int("max_depth", 4, 12),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbosity": 0,
+        }
+        model = xgb.XGBClassifier(**params)
+        model.fit(x_train, y_train, sample_weight=sw_train, eval_set=[(x_train, y_train)], verbose=False)
+        probs = model.predict_proba(x_train)[:, 1]
+        from sklearn.metrics import f1_score
+        return f1_score(y_train, probs >= 0.5, pos_label=1)
+
+    print("  Optimizing XGBoost hyperparameters (Optuna)...")
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=OPTUNA_TRIALS, timeout=OPTUNA_TIMEOUT_SECONDS, n_jobs=1,
+                   show_progress_bar=False)
+    print(f"  Best trial F1: {study.best_value:.4f}")
+    params = study.best_params
+    params["random_state"] = 42
+    params["n_jobs"] = -1
+    params["verbosity"] = 0
+    return params
+
+
+def _optimize_lightgbm(
+    x_train: sp.csr_matrix,
+    y_train: np.ndarray,
+    sw_train: np.ndarray,
+) -> dict[str, Any]:
+    try:
+        import lightgbm as lgb
+        import optuna
+    except ImportError:
+        return {"n_estimators": 500, "max_depth": 10, "num_leaves": 127,
+                "learning_rate": 0.05}
+
+    def objective(trial):
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 200, 800),
+            "max_depth": trial.suggest_int("max_depth", 4, 12),
+            "num_leaves": trial.suggest_int("num_leaves", 31, 255),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
+            "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
+            "class_weight": "balanced",
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbose": -1,
+        }
+        model = lgb.LGBMClassifier(**params)
+        model.fit(x_train, y_train, sample_weight=sw_train)
+        from sklearn.metrics import f1_score
+        preds = model.predict(x_train)
+        return f1_score(y_train, preds, pos_label=1)
+
+    print("  Optimizing LightGBM hyperparameters (Optuna)...")
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=OPTUNA_TRIALS, timeout=OPTUNA_TIMEOUT_SECONDS, n_jobs=1,
+                   show_progress_bar=False)
+    print(f"  Best trial F1: {study.best_value:.4f}")
+    params = study.best_params
+    params["class_weight"] = "balanced"
+    params["random_state"] = 42
+    params["n_jobs"] = -1
+    params["verbose"] = -1
+    return params
+
+
+def build_candidates(
+    competition: bool = False,
+    x_train: sp.csr_matrix | None = None,
+    y_train: np.ndarray | None = None,
+    sw_train: np.ndarray | None = None,
+) -> dict[str, Any]:
     c = {
-        "LogisticRegression": LogisticRegression(
-            C=1.0, max_iter=5000, class_weight="balanced",
-            solver="saga", penalty="elasticnet", l1_ratio=0.15,
-            tol=1e-4, random_state=42, n_jobs=-1,
-        ),
-        "ComplementNB": ComplementNB(alpha=0.1, norm=False),
-        "SGDClassifier_log_loss": SGDClassifier(
-            loss="log_loss", penalty="elasticnet", max_iter=2000,
-            tol=1e-3, class_weight="balanced", random_state=42, n_jobs=-1,
-        ),
-        "SGDClassifier_hinge": SGDClassifier(
-            loss="hinge", penalty="elasticnet", max_iter=2000,
-            tol=1e-3, class_weight="balanced", random_state=42, n_jobs=-1,
-        ),
-        "LinearSVC": LinearSVC(
-            C=1.0, max_iter=5000, class_weight="balanced",
-            dual=False, tol=1e-4, random_state=42,
+        "SGDClassifier": SGDClassifier(
+            loss="log_loss", penalty="elasticnet", alpha=0.0001,
+            l1_ratio=0.15, max_iter=1000, tol=1e-3,
+            class_weight="balanced", random_state=42, n_jobs=-1,
         ),
         "MLPClassifier": MLPClassifier(
-            hidden_layer_sizes=(128, 32), activation="relu",
+            hidden_layer_sizes=(128, 64, 32), activation="relu",
             solver="adam", max_iter=200, early_stopping=True,
             validation_fraction=0.1, random_state=42,
         ),
@@ -109,34 +196,45 @@ def build_candidates(competition: bool = False) -> dict[str, Any]:
 
     if competition:
         c["MLPClassifier_deep"] = MLPClassifier(
-            hidden_layer_sizes=(256, 128, 64), activation="relu",
+            hidden_layer_sizes=(256, 128, 64, 32), activation="relu",
             solver="adam", max_iter=300, early_stopping=True,
             validation_fraction=0.1, random_state=42,
         )
 
-    try:
-        import xgboost as xgb
-        c["XGBoost"] = xgb.XGBClassifier(
-            n_estimators=300, max_depth=8, learning_rate=0.1,
-            subsample=0.8, colsample_bytree=0.8, random_state=42,
-            n_jobs=-1, verbosity=0,
-        )
-        if competition:
-            c["XGBoost_large"] = xgb.XGBClassifier(
-                n_estimators=500, max_depth=10, learning_rate=0.05,
-                subsample=0.8, colsample_bytree=0.6, random_state=42,
+    if x_train is not None and y_train is not None:
+        try:
+            import xgboost as xgb
+            xgb_params = _optimize_xgboost(x_train, y_train, sw_train)
+            c["XGBoost"] = xgb.XGBClassifier(**xgb_params)
+        except ImportError:
+            try:
+                import xgboost as xgb
+                c["XGBoost"] = xgb.XGBClassifier(
+                    n_estimators=300, max_depth=8, learning_rate=0.1,
+                    subsample=0.8, colsample_bytree=0.8, random_state=42,
+                    n_jobs=-1, verbosity=0,
+                )
+            except ImportError:
+                pass
+    else:
+        try:
+            import xgboost as xgb
+            c["XGBoost"] = xgb.XGBClassifier(
+                n_estimators=300, max_depth=8, learning_rate=0.1,
+                subsample=0.8, colsample_bytree=0.8, random_state=42,
                 n_jobs=-1, verbosity=0,
             )
-    except ImportError:
-        pass
+        except ImportError:
+            pass
 
     try:
         import lightgbm as lgb
-        c["LightGBM"] = lgb.LGBMClassifier(
-            n_estimators=300, max_depth=10, num_leaves=63,
-            learning_rate=0.1, class_weight="balanced",
-            random_state=42, n_jobs=-1, verbose=-1,
-        )
+        if not any(k.startswith("LightGBM") for k in c):
+            c["LightGBM"] = lgb.LGBMClassifier(
+                n_estimators=300, max_depth=8, num_leaves=63,
+                learning_rate=0.1, class_weight="balanced",
+                random_state=42, n_jobs=-1, verbose=-1,
+            )
     except ImportError:
         pass
 
@@ -152,20 +250,26 @@ def train_classical(
     print("\n" + "=" * 60)
     print("  TRACK A — Classical ML Pipeline")
     if competition:
-        print("  MODE: Competition (wider features, deeper models)")
+        print("  MODE: Competition (wider features, deeper models, Optuna HPO)")
     print("=" * 60)
 
     word_vec = create_word_vectorizer(competition=competition)
     print(f"\n  Vectorizer: max_features={word_vec.max_features}, "
           f"ngram={word_vec.ngram_range}, min_df={word_vec.min_df}, "
-          f"max_df={word_vec.max_df}")
+          f"max_df={word_vec.max_df}, dtype=float32")
 
     x_train, x_test, y_train, y_test, sw_train = build_classical_features(
         word_vec, train_df, test_df
     )
     print(ram_report("After features"))
 
-    candidates = build_candidates(competition=competition)
+    if competition:
+        candidates = build_candidates(
+            competition=True, x_train=x_train, y_train=y_train, sw_train=sw_train,
+        )
+    else:
+        candidates = build_candidates(competition=False)
+
     print(f"\n  Evaluating {len(candidates)} candidates...")
 
     all_metrics: list[EvalMetrics] = []
@@ -193,6 +297,7 @@ def train_classical(
         "min_df": getattr(word_vec, "min_df", WORD_MIN_DF),
         "max_df": getattr(word_vec, "max_df", WORD_MAX_DF),
         "sublinear_tf": True,
+        "dtype": "float32",
         "meta_feature_names": META_FEATURE_NAMES,
         "word_features": int(x_train.shape[1] - len(META_FEATURE_NAMES)),
         "meta_features": int(len(META_FEATURE_NAMES)),

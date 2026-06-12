@@ -4,10 +4,13 @@ import re
 
 import nltk
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
 
 from app.core.constants import (
-    EMAIL_PATTERN, MONEY_PATTERN, NLTK_RESOURCES, PHONE_PATTERN, URL_PATTERN,
+    EMAIL_PATTERN,
+    MONEY_PATTERN,
+    NLTK_RESOURCES,
+    PHONE_PATTERN,
+    URL_PATTERN,
 )
 
 
@@ -32,19 +35,17 @@ except LookupError:
 STOPWORDS -= {
     "free", "win", "won", "prize", "click", "now", "urgent",
     "limited", "cash", "offer", "call", "reply", "stop", "apply", "claim",
+    "no", "not", "never", "don", "isn", "wasn", "aren", "won",
 }
-
-LEMMATIZER = WordNetLemmatizer()
-
-
-def _safe_lemmatize(token: str) -> str:
-    try:
-        return LEMMATIZER.lemmatize(token)
-    except LookupError:
-        return token
 
 
 def preprocess_text(text: str) -> str:
+    """Preprocess text for TF-IDF vectorization.
+
+    Strategy: lowercase, replace structured tokens with placeholders,
+    strip punctuation, remove stopwords. NO stemming or lemmatization —
+    morphological variation is signal for spam detection, not noise.
+    """
     if not isinstance(text, str):
         return ""
     value = text.lower()
@@ -54,8 +55,7 @@ def preprocess_text(text: str) -> str:
     value = MONEY_PATTERN.sub(" moneytoken ", value)
     value = re.sub(r"[^a-z0-9\s]", " ", value)
     tokens = [
-        _safe_lemmatize(token)
-        for token in value.split()
+        token for token in value.split()
         if token not in STOPWORDS and len(token) > 1
     ]
     return " ".join(tokens)

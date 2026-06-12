@@ -7,10 +7,10 @@ RUN useradd --create-home --shell /bin/bash appuser
 
 WORKDIR /app
 
-COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt stopwords wordnet
+RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt stopwords
 
 COPY . /app
 

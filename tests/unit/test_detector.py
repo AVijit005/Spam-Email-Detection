@@ -61,7 +61,7 @@ class TestVectorizerBundle(unittest.TestCase):
     def test_wraps_vectorizer_object(self):
         vec = DummyVectorizer()
         bundle = _vectorizer_bundle(vec)
-        self.assertEqual(bundle["word_vectorizer"], vec)
+        self.assertEqual(bundle["word_vec"], vec)
         self.assertIsNone(bundle["char_vectorizer"])
 
 

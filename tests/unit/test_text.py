@@ -6,12 +6,11 @@ from app.core.text import preprocess_text
 
 
 class TestPreprocessText(unittest.TestCase):
-    def test_tokenizes_and_lemmatizes_basic_text(self):
+    def test_tokenizes_basic_text(self):
         result = preprocess_text("Running quickly stores")
         self.assertIn("running", result)
         self.assertIn("quickly", result)
-        self.assertIn("store", result)
-        self.assertNotIn("stores", result)
+        self.assertIn("stores", result)
 
     def test_replaces_url_with_urltoken(self):
         result = preprocess_text("Visit https://example.com/path now")

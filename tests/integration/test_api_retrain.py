@@ -18,7 +18,7 @@ def _inject_state():
     import numpy as np
 
     class DummyModel:
-        coef_ = np.array([[0.1] * 18])
+        coef_ = np.array([[0.1] * 34])
         def predict_proba(self, f):
             return np.array([[0.1, 0.9]])
     class DummyVectorizer:
@@ -93,7 +93,7 @@ class TestApiRetrain(unittest.TestCase):
             import numpy as np
 
             class D2:
-                coef_ = np.array([[0.1] * 18])
+                coef_ = np.array([[0.1] * 34])
                 def predict_proba(self, f):
                     return np.array([[0.1, 0.9]])
             class V2:

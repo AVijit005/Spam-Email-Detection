@@ -13,7 +13,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 class DummyModel:
-    coef_ = __import__("numpy").array([[0.1] * 18])
+    coef_ = __import__("numpy").array([[0.1] * 34])
     def predict_proba(self, features):
         import numpy as np
         return np.array([[0.12, 0.88]], dtype=np.float32)

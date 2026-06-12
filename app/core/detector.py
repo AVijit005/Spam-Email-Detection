@@ -57,7 +57,7 @@ def _base_result_payload(
 def _vectorizer_bundle(vectorizer: Any) -> dict[str, Any]:
     if isinstance(vectorizer, dict):
         return vectorizer
-    return {"version": 1, "word_vectorizer": vectorizer, "model_type": "classical",
+    return {"version": 1, "word_vec": vectorizer, "model_type": "classical",
             "char_vectorizer": None, "meta_feature_names": META_FEATURE_NAMES}
 
 
@@ -69,17 +69,25 @@ def _is_transformer_model(model: Any) -> bool:
     return cls_name == "TransformerWrapper"
 
 
+def _is_ensemble_model(model: Any) -> bool:
+    try:
+        cls_name = type(model).__name__
+    except Exception:
+        cls_name = ""
+    return cls_name == "EnsemblePredictor"
+
+
 def _build_feature_parts(vectorizer: Any, raw_text: str, processed_text: str) -> tuple[sp.csr_matrix, list[str], list[int]]:
     bundle = _vectorizer_bundle(vectorizer)
     feature_parts: list[sp.csr_matrix] = []
     feature_names: list[str] = []
     part_sizes: list[int] = []
 
-    word_vectorizer = bundle.get("word_vectorizer")
-    if word_vectorizer is not None:
-        word_matrix = word_vectorizer.transform([processed_text])
+    word_vec = bundle.get("word_vec") or bundle.get("word_vectorizer")
+    if word_vec is not None:
+        word_matrix = word_vec.transform([processed_text])
         feature_parts.append(word_matrix)
-        names = [f"word:{name}" for name in word_vectorizer.get_feature_names_out()]
+        names = [f"word:{name}" for name in word_vec.get_feature_names_out()]
         feature_names.extend(names)
         part_sizes.append(len(names))
 
@@ -104,6 +112,12 @@ def _build_feature_parts(vectorizer: Any, raw_text: str, processed_text: str) ->
 
 def _transformer_predict(model: Any, raw_text: str) -> tuple[float, float]:
     probs = model.predict_proba([raw_text])
+    ham_probability, spam_probability = float(probs[0, 0]), float(probs[0, 1])
+    return spam_probability, ham_probability
+
+
+def _ensemble_predict(model: Any, features: sp.csr_matrix, raw_text: str) -> tuple[float, float]:
+    probs = model.predict_proba(features, [raw_text])
     ham_probability, spam_probability = float(probs[0, 0]), float(probs[0, 1])
     return spam_probability, ham_probability
 
@@ -180,7 +194,10 @@ def predict_email(
 
     features, feature_names = build_feature_matrix(vectorizer, subject, body)
 
-    if _is_transformer_model(model):
+    if _is_ensemble_model(model):
+        raw_text = compose_email_text(subject, body)
+        spam_probability, ham_probability = _ensemble_predict(model, features, raw_text)
+    elif _is_transformer_model(model):
         raw_text = compose_email_text(subject, body)
         spam_probability, ham_probability = _transformer_predict(model, raw_text)
     else:

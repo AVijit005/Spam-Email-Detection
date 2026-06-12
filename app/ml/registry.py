@@ -64,8 +64,14 @@ def load_model(
         _verify_hash(vectorizer_path, vectorizer_hash_path.read_text().strip())
     with open(model_path, "rb") as f:
         model = pickle.load(f)
-    with open(vectorizer_path, "rb") as f:
-        vectorizer = pickle.load(f)
+
+    vectorizer: Any = None
+    if vectorizer_path.suffix == ".pkl":
+        with open(vectorizer_path, "rb") as f:
+            vectorizer = pickle.load(f)
+    elif vectorizer_path.is_dir():
+        vectorizer = str(vectorizer_path)
+
     metadata: dict[str, Any] = {}
     if metadata_path.exists():
         with open(metadata_path, "r", encoding="utf-8") as f:

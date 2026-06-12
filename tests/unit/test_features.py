@@ -62,11 +62,11 @@ class TestMatchedSpamPhrases(unittest.TestCase):
 class TestExtractMetaFeatures(unittest.TestCase):
     def test_returns_correct_shape_single_text(self):
         result = extract_meta_features("Hello world")
-        self.assertEqual(result.shape, (1, 16))
+        self.assertEqual(result.shape, (1, 32))
 
     def test_returns_correct_shape_batch(self):
         result = extract_meta_features(["Hello world", "Test"])
-        self.assertEqual(result.shape, (2, 16))
+        self.assertEqual(result.shape, (2, 32))
 
     def test_url_count(self):
         result = extract_meta_features("Visit https://example.com and http://test.org")
@@ -100,7 +100,7 @@ class TestExtractMetaFeatures(unittest.TestCase):
 
     def test_empty_text_produces_valid_row(self):
         result = extract_meta_features("")
-        self.assertEqual(result.shape, (1, 16))
+        self.assertEqual(result.shape, (1, 32))
         self.assertFalse(np.isnan(result).any())
 
 
