@@ -23,11 +23,16 @@ def _format_feature_explanation(feature_name: str, is_spam: bool) -> str:
 
 
 def explain_prediction(model: Any, features: sp.csr_matrix, feature_names: list[str], label: str) -> list[str]:
-    if not hasattr(model, "coef_"):
-        return []
-    coefficients = np.asarray(model.coef_[0]).ravel()
     active_indices = features.indices
     active_values = features.data
+
+    if hasattr(model, "coef_"):
+        coefficients = np.asarray(model.coef_[0]).ravel()
+    elif hasattr(model, "feature_importances_"):
+        coefficients = model.feature_importances_
+    else:
+        return []
+
     contributions = active_values * coefficients[active_indices]
     if label == "Spam":
         candidate_pairs = [(feature_names[i], c) for i, c in zip(active_indices, contributions) if c > 0]

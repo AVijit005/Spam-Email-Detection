@@ -1,0 +1,8 @@
+# ml-workflow
+- For this project: audit and implement all code changes before running any model training. Defer the single training run until all analysis, implementation, verification, and compatibility checks are complete. Never train incrementally or after each change. Confidence: 0.85
+- When choosing ML architecture for this project: explicitly weigh tradeoffs between Spam F1, memory, training time, and inference speed. Prefer practical production solutions over theoretical optima. Confidence: 0.80
+- For this project (laptop-bound ML): before finalizing TF-IDF parameters, estimate memory usage, sparse matrix size, and expected training time. Report all planned settings before training. Confidence: 0.75
+- If a proposed change would increase training time by more than 2x, explicitly explain why before implementing. Confidence: 0.70
+- For this project: never run any training (final or exploratory) on the 16 GB laptop. All training happens on Kaggle. Limit local work to small-sample diagnostics (<5000 rows) and code changes only. Confidence: 0.75
+- Maintain a two-track ML architecture: Track A (classical: TF-IDF + XGBoost/LightGBM/LinearSVC for production deployment) and Track B (transformer: DistilBERT/RoBERTa/DeBERTa for max performance). Both tracks share the same holdout set for fair comparison. Confidence: 0.75
+- For final artifact export: retrain the winning model on 100% of the dataset regardless of track. Classical: refit vectorizer and model on all rows. Transformer: fine-tune on all 342,178 rows after model selection. The 80/20 split is ONLY for candidate evaluation and winner selection. Confidence: 0.85

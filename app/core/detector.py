@@ -57,8 +57,16 @@ def _base_result_payload(
 def _vectorizer_bundle(vectorizer: Any) -> dict[str, Any]:
     if isinstance(vectorizer, dict):
         return vectorizer
-    return {"version": 1, "word_vectorizer": vectorizer, "char_vectorizer": None,
-            "meta_feature_names": META_FEATURE_NAMES}
+    return {"version": 1, "word_vectorizer": vectorizer, "model_type": "classical",
+            "char_vectorizer": None, "meta_feature_names": META_FEATURE_NAMES}
+
+
+def _is_transformer_model(model: Any) -> bool:
+    try:
+        cls_name = type(model).__name__
+    except Exception:
+        cls_name = ""
+    return cls_name == "TransformerWrapper"
 
 
 def _build_feature_parts(vectorizer: Any, raw_text: str, processed_text: str) -> tuple[sp.csr_matrix, list[str], list[int]]:
@@ -66,6 +74,7 @@ def _build_feature_parts(vectorizer: Any, raw_text: str, processed_text: str) ->
     feature_parts: list[sp.csr_matrix] = []
     feature_names: list[str] = []
     part_sizes: list[int] = []
+
     word_vectorizer = bundle.get("word_vectorizer")
     if word_vectorizer is not None:
         word_matrix = word_vectorizer.transform([processed_text])
@@ -73,6 +82,7 @@ def _build_feature_parts(vectorizer: Any, raw_text: str, processed_text: str) ->
         names = [f"word:{name}" for name in word_vectorizer.get_feature_names_out()]
         feature_names.extend(names)
         part_sizes.append(len(names))
+
     char_vectorizer = bundle.get("char_vectorizer")
     if char_vectorizer is not None:
         char_matrix = char_vectorizer.transform([raw_text.lower()])
@@ -80,14 +90,22 @@ def _build_feature_parts(vectorizer: Any, raw_text: str, processed_text: str) ->
         names = [f"char:{name}" for name in char_vectorizer.get_feature_names_out()]
         feature_names.extend(names)
         part_sizes.append(len(names))
+
     meta_names = bundle.get("meta_feature_names", META_FEATURE_NAMES)
     meta_matrix = sp.csr_matrix(extract_meta_features(raw_text))
     feature_parts.append(meta_matrix)
     meta_feature_names = [f"meta:{name}" for name in meta_names]
     feature_names.extend(meta_feature_names)
     part_sizes.append(len(meta_feature_names))
+
     matrix = sp.hstack(feature_parts, format="csr")
     return matrix, feature_names, part_sizes
+
+
+def _transformer_predict(model: Any, raw_text: str) -> tuple[float, float]:
+    probs = model.predict_proba([raw_text])
+    ham_probability, spam_probability = float(probs[0, 0]), float(probs[0, 1])
+    return spam_probability, ham_probability
 
 
 def build_feature_matrix(
@@ -161,7 +179,12 @@ def predict_email(
         )
 
     features, feature_names = build_feature_matrix(vectorizer, subject, body)
-    spam_probability, ham_probability = _probabilities_from_model(model, features)
+
+    if _is_transformer_model(model):
+        raw_text = compose_email_text(subject, body)
+        spam_probability, ham_probability = _transformer_predict(model, raw_text)
+    else:
+        spam_probability, ham_probability = _probabilities_from_model(model, features)
 
     if spam_probability >= spam_threshold:
         return _base_result_payload(
