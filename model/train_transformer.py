@@ -20,6 +20,7 @@ import importlib.util
 import math
 import os
 import random
+import signal
 import sys
 import time
 from contextlib import nullcontext
@@ -784,11 +785,27 @@ def train_transformer(
         resume_ckpt_path = ckpt_dir / f"{config.model_name}_checkpoint.pt"
 
     start_epoch = 1
+    resume_path = None
     if config.resume_from:
+        resume_path = Path(config.resume_from)
+    elif checkpoint_dir and is_main:
+        ckpt_dir = Path(checkpoint_dir)
+        candidates = sorted(
+            list(ckpt_dir.glob(f"{config.model_name}_checkpoint*.pt")) +
+            list(ckpt_dir.glob(f"{config.model_name}_emergency.pt")),
+            key=lambda p: p.stat().st_mtime
+        )
+        if candidates:
+            resume_path = candidates[-1]
+            if resume_path.name.endswith("_emergency.pt"):
+                print(f"  Auto-resume from emergency checkpoint: {resume_path}")
+            else:
+                print(f"  Auto-resume from latest checkpoint: {resume_path}")
+
+    if resume_path:
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {resume_path}")
         if is_main:
-            resume_path = Path(config.resume_from)
-            if not resume_path.exists():
-                raise FileNotFoundError(f"Resume checkpoint not found: {config.resume_from}")
             print(f"  Resuming from checkpoint: {resume_path}")
             resume_data = torch.load(resume_path, map_location="cpu", weights_only=False)
             best_state = _load_checkpoint_state(resume_data, model, optimizer, scheduler, scaler, use_ddp and ddp_model is not None)
@@ -798,13 +815,55 @@ def train_transformer(
         if use_ddp:
             dist.barrier()
         if not is_main:
-            resume_path = Path(config.resume_from)
             resume_data = torch.load(resume_path, map_location="cpu", weights_only=False)
             best_state = _load_checkpoint_state(resume_data, model, optimizer, scheduler, scaler, use_ddp and ddp_model is not None)
             start_epoch = resume_data["epoch"] + 1
             best_f1 = resume_data.get("best_f1", 0.0)
         if use_ddp:
             dist.barrier()
+
+    emergency_path = resume_ckpt_path.with_name(f"{config.model_name}_emergency.pt") if resume_ckpt_path else None
+    _current_epoch = {"epoch": start_epoch - 1}
+
+    def _emergency_save(signum, frame):
+        if is_main and emergency_path is not None:
+            print(f"\n  [EMERGENCY SAVE] Signal {signum} — saving checkpoint epoch {_current_epoch['epoch']}...")
+            try:
+                ckpt_data = {
+                    "epoch": _current_epoch["epoch"],
+                    "model_state_dict": {k: v.cpu().clone() for k, v in model.state_dict().items()},
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "best_f1": best_f1,
+                    "best_model_state_dict": best_state,
+                    "rng_state": {
+                        "python": random.getstate(),
+                        "numpy": np.random.get_state(),
+                        "torch": torch.get_rng_state(),
+                        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                    },
+                    "config_model_name": config.model_name,
+                }
+                if scaler is not None:
+                    ckpt_data["scaler_state_dict"] = scaler.state_dict()
+                tmp_path = emergency_path.with_suffix(".tmp")
+                torch.save(ckpt_data, tmp_path)
+                tmp_path.rename(emergency_path)
+                print(f"  [EMERGENCY SAVE] Checkpoint written: {emergency_path}")
+                try:
+                    resume_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copy2(emergency_path, resume_ckpt_path)
+                    print(f"  [EMERGENCY SAVE] Synced to resume checkpoint: {resume_ckpt_path}")
+                except Exception:
+                    pass
+                print(f"  [EMERGENCY SAVE] Complete. Resume available.")
+            except Exception as e:
+                print(f"  [EMERGENCY SAVE] FAILED: {e}")
+        os._exit(1)
+
+    _prev_sigterm = signal.signal(signal.SIGTERM, _emergency_save)
+    _prev_sigint = signal.signal(signal.SIGINT, _emergency_save)
 
     sub_loader = None
     sub_sampler = None
@@ -824,6 +883,7 @@ def train_transformer(
         )
 
     for epoch in range(start_epoch, config.epochs + 1):
+        _current_epoch["epoch"] = epoch
         if sub_loader is not None and epoch <= config.curriculum_epochs:
             if sub_sampler is not None:
                 sub_sampler.set_epoch(epoch)
@@ -917,6 +977,9 @@ def train_transformer(
                 if scaler is not None:
                     ckpt_data["scaler_state_dict"] = scaler.state_dict()
                 torch.save(ckpt_data, resume_ckpt_path)
+
+    signal.signal(signal.SIGTERM, _prev_sigterm)
+    signal.signal(signal.SIGINT, _prev_sigint)
 
     if best_state is not None:
         model.load_state_dict(_normalize_state_dict(best_state, use_ddp and ddp_model is not None))
