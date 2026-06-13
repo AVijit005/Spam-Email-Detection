@@ -222,6 +222,7 @@ def _load_transformer_assets(
         tokenizer.pad_token = tokenizer.eos_token
 
     model.to(device)
+    model = model.float()
     return tokenizer, hf_config, model, device
 
 
