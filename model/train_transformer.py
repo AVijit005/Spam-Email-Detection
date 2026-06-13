@@ -19,6 +19,7 @@ import gc
 import importlib.util
 import math
 import os
+import random
 import sys
 import time
 from contextlib import nullcontext
@@ -104,6 +105,7 @@ class TransformerConfig:
     fast_dev_run: bool = False
     auto_batch_size: bool = False
     compile_model: bool = False
+    resume_from: str | None = None
 
 
 def _device() -> torch.device:
@@ -117,12 +119,30 @@ def _device() -> torch.device:
 def _get_ddp_config() -> tuple[bool, int, int]:
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank == -1 or not torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if gpu_count > 1 and local_rank == -1:
+            print(f"  ⚠ WARNING: {gpu_count} GPUs detected but LOCAL_RANK=-1. "
+                  f"Falling back to single-GPU training.\n"
+                  f"  Use: torchrun --nproc_per_node={gpu_count} model/train_model.py")
         return False, 0, 1
     world_size = int(os.environ.get("WORLD_SIZE", int(torch.cuda.device_count())))
     if world_size < 2:
+        if torch.cuda.device_count() > 1:
+            print(f"  ⚠ WARNING: {torch.cuda.device_count()} GPUs detected but WORLD_SIZE={world_size}. "
+                  f"Falling back to single-GPU training.")
         return False, local_rank, 1
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
+        master_addr = os.environ.get("MASTER_ADDR")
+        master_port = os.environ.get("MASTER_PORT")
+        if not master_addr or not master_port:
+            raise RuntimeError(
+                f"DDP requires MASTER_ADDR and MASTER_PORT, but got:\n"
+                f"  MASTER_ADDR={master_addr or '<missing>'}\n"
+                f"  MASTER_PORT={master_port or '<missing>'}\n"
+                f"  Use torchrun to launch (sets these automatically):\n"
+                f"    torchrun --nproc_per_node={world_size} model/train_model.py"
+            )
         dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     dummy = torch.zeros(1, device=f"cuda:{local_rank}")
     dist.all_reduce(dummy)
@@ -539,6 +559,34 @@ def evaluate_model(
     return probs.cpu().numpy(), labels.cpu().numpy()
 
 
+def _normalize_state_dict(state_dict: dict[str, torch.Tensor], is_ddp: bool) -> dict[str, torch.Tensor]:
+    has_prefix = any(k.startswith("module.") for k in state_dict)
+    if has_prefix and not is_ddp:
+        return {k[7:]: v for k, v in state_dict.items()}
+    if not has_prefix and is_ddp:
+        return {f"module.{k}": v for k, v in state_dict.items()}
+    return state_dict
+
+
+def _load_checkpoint_state(
+    resume_data: dict[str, Any],
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    scaler: Any | None,
+    is_ddp: bool,
+) -> dict[str, torch.Tensor] | None:
+    model.load_state_dict(_normalize_state_dict(resume_data["model_state_dict"], is_ddp))
+    optimizer.load_state_dict(resume_data["optimizer_state_dict"])
+    scheduler.load_state_dict(resume_data["scheduler_state_dict"])
+    if scaler is not None and "scaler_state_dict" in resume_data:
+        scaler.load_state_dict(resume_data["scaler_state_dict"])
+    best = resume_data.get("best_model_state_dict")
+    if best is not None and is_ddp:
+        best = _normalize_state_dict(best, is_ddp)
+    return best
+
+
 def train_transformer(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
@@ -579,14 +627,9 @@ def train_transformer(
     ddp_model = None
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], output_device=local_rank,
-                    find_unused_parameters=False, broadcast_buffers=False,
+                    find_unused_parameters=True, broadcast_buffers=False,
                     gradient_as_bucket_view=True)
         ddp_model = model
-
-    if config.compile_model and hasattr(torch, 'compile'):
-        model = torch.compile(model, mode="reduce-overhead")
-        if is_main:
-            print("  torch.compile: enabled (reduce-overhead)")
 
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
@@ -600,23 +643,59 @@ def train_transformer(
     y_train = train_df["label"].values
     y_test = test_df["label"].values
 
-    train_dataset = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=True)
-    test_dataset = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=True)
+    token_cache_dir = Path(checkpoint_dir) / "token_cache" if checkpoint_dir else None
+
+    if token_cache_dir:
+        train_cache = token_cache_dir / "train_tokenized.pt"
+        test_cache = token_cache_dir / "test_tokenized.pt"
+        if is_main:
+            token_cache_dir.mkdir(parents=True, exist_ok=True)
+            if train_cache.exists() and test_cache.exists():
+                train_ids, train_mask = torch.load(train_cache, map_location="cpu", weights_only=False)
+                test_ids, test_mask = torch.load(test_cache, map_location="cpu", weights_only=False)
+                train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=False)
+                test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=False)
+                train_ds._pre_tokenized = (train_ids, train_mask)
+                test_ds._pre_tokenized = (test_ids, test_mask)
+                if is_main:
+                    print(f"  Token cache loaded from {token_cache_dir}")
+            else:
+                train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=True)
+                test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=True)
+                torch.save(train_ds._pre_tokenized, train_cache)
+                torch.save(test_ds._pre_tokenized, test_cache)
+                if is_main:
+                    print(f"  Token cache saved to {token_cache_dir}")
+        if use_ddp:
+            dist.barrier()
+        if not is_main:
+            train_ids, train_mask = torch.load(train_cache, map_location="cpu", weights_only=False)
+            test_ids, test_mask = torch.load(test_cache, map_location="cpu", weights_only=False)
+            train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=False)
+            test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=False)
+            train_ds._pre_tokenized = (train_ids, train_mask)
+            test_ds._pre_tokenized = (test_ids, test_mask)
+    else:
+        train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=True)
+        test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=True)
+
+    train_dataset = train_ds
+    test_dataset = test_ds
 
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank,
-                                       shuffle=True, drop_last=True) if use_ddp else None
+                                       shuffle=True, drop_last=False) if use_ddp else None
 
     optimal_workers = _get_optimal_workers()
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size,
         sampler=train_sampler, shuffle=(train_sampler is None),
         num_workers=optimal_workers, pin_memory=torch.cuda.is_available(),
-        persistent_workers=True, prefetch_factor=4, drop_last=True,
+        persistent_workers=True, prefetch_factor=4, drop_last=False,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size * 2, shuffle=False,
         num_workers=2, pin_memory=torch.cuda.is_available(),
-        persistent_workers=False, prefetch_factor=4,
+        persistent_workers=True, prefetch_factor=4,
     )
 
     if is_main:
@@ -629,8 +708,19 @@ def train_transformer(
         print(ram_report("Before model load"))
         print(ram_report("After model load"))
 
-    criterion = FocalLoss(alpha=config.focal_alpha, gamma=config.focal_gamma, reduction="mean")
     fgm = FGM(model, epsilon=config.adversarial_epsilon) if config.adversarial_epsilon > 0 else None
+
+    if config.compile_model and hasattr(torch, 'compile'):
+        if fgm is not None:
+            if is_main:
+                print("  torch.compile: DISABLED — FGM adversarial training is active (graph-break risk)")
+            config.compile_model = False
+        else:
+            model = torch.compile(model, mode="reduce-overhead")
+            if is_main:
+                print("  torch.compile: enabled (reduce-overhead)")
+
+    criterion = FocalLoss(alpha=config.focal_alpha, gamma=config.focal_gamma, reduction="mean")
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped = [
@@ -657,32 +747,66 @@ def train_transformer(
     t0 = time.perf_counter()
     best_f1 = 0.0
     best_state = None
-    ckpt_path = None
+    checkpoint_path = None
+    resume_ckpt_path = None
     if checkpoint_dir and is_main:
-        ckpt_path = Path(checkpoint_dir) / f"{config.model_name}_best.pt"
-        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        ckpt_dir = Path(checkpoint_dir)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = ckpt_dir / f"{config.model_name}_best.pt"
+        resume_ckpt_path = ckpt_dir / f"{config.model_name}_checkpoint.pt"
 
-    for epoch in range(1, config.epochs + 1):
-        if train_sampler is not None:
-            train_sampler.set_epoch(epoch)
+    start_epoch = 1
+    if config.resume_from:
+        if is_main:
+            resume_path = Path(config.resume_from)
+            if not resume_path.exists():
+                raise FileNotFoundError(f"Resume checkpoint not found: {config.resume_from}")
+            print(f"  Resuming from checkpoint: {resume_path}")
+            resume_data = torch.load(resume_path, map_location="cpu", weights_only=False)
+            best_state = _load_checkpoint_state(resume_data, model, optimizer, scheduler, scaler, use_ddp and ddp_model is not None)
+            start_epoch = resume_data["epoch"] + 1
+            best_f1 = resume_data.get("best_f1", 0.0)
+            print(f"  Loaded: epoch {resume_data['epoch']}, best_f1={best_f1:.4f}")
+        if use_ddp:
+            dist.barrier()
+        if not is_main:
+            resume_path = Path(config.resume_from)
+            resume_data = torch.load(resume_path, map_location="cpu", weights_only=False)
+            best_state = _load_checkpoint_state(resume_data, model, optimizer, scheduler, scaler, use_ddp and ddp_model is not None)
+            start_epoch = resume_data["epoch"] + 1
+            best_f1 = resume_data.get("best_f1", 0.0)
+        if use_ddp:
+            dist.barrier()
 
-        if config.curriculum_epochs > 0 and epoch <= config.curriculum_epochs:
-            difficulties = _compute_difficulty_scores(train_texts)
-            sorted_idx = np.argsort(difficulties)
-            keep_n = int(len(sorted_idx) * config.curriculum_easy_frac)
-            easy_idx = sorted_idx[:keep_n]
+    sub_loader = None
+    sub_sampler = None
+    if config.curriculum_epochs > 0:
+        difficulties = _compute_difficulty_scores(train_texts)
+        sorted_idx = np.argsort(difficulties)
+        keep_n = int(len(sorted_idx) * config.curriculum_easy_frac)
+        easy_idx = sorted_idx[:keep_n]
+        sub_dataset = torch.utils.data.Subset(train_dataset, easy_idx)
+        sub_sampler = DistributedSampler(sub_dataset, num_replicas=world_size, rank=local_rank,
+                                          shuffle=True, drop_last=True) if use_ddp else None
+        sub_loader = DataLoader(
+            sub_dataset, batch_size=config.batch_size,
+            sampler=sub_sampler, shuffle=(sub_sampler is None),
+            num_workers=4, pin_memory=(device.type == "cuda"),
+            persistent_workers=True, prefetch_factor=4, drop_last=True,
+        )
+
+    for epoch in range(start_epoch, config.epochs + 1):
+        if sub_loader is not None and epoch <= config.curriculum_epochs:
+            if sub_sampler is not None:
+                sub_sampler.set_epoch(epoch)
             train_dataset.set_difficulty(difficulties)
-            sub_dataset = torch.utils.data.Subset(train_dataset, easy_idx)
-            sub_loader = DataLoader(
-                sub_dataset, batch_size=config.batch_size, shuffle=True,
-                num_workers=4, pin_memory=(device.type == "cuda"),
-                persistent_workers=True, prefetch_factor=4,
-            )
             active_loader = sub_loader
             if is_main:
                 print(f"  Curriculum epoch {epoch}/{config.curriculum_epochs}: "
                       f"using {keep_n}/{len(train_texts)} easiest samples")
         else:
+            if train_sampler is not None:
+                train_sampler.set_epoch(epoch)
             train_dataset.set_difficulty(np.zeros(len(train_texts)))
             active_loader = train_loader
 
@@ -690,31 +814,66 @@ def train_transformer(
                                fgm, scaler, grad_accum=config.gradient_accumulation_steps,
                                ddp_model=ddp_model)
 
-        probs, labels = evaluate_model(model, test_loader, device)
-        preds = probs.argmax(axis=1)
-        from sklearn.metrics import f1_score
-        epoch_f1 = f1_score(labels, preds, pos_label=1)
+        if is_main:
+            probs, labels = evaluate_model(model, test_loader, device)
+            preds = probs.argmax(axis=1)
+            from sklearn.metrics import f1_score
+            epoch_f1 = f1_score(labels, preds, pos_label=1)
+        else:
+            epoch_f1 = 0.0
+
+        if use_ddp:
+            dist.barrier()
 
         if is_main:
+            gpu_info = ""
+            if torch.cuda.is_available():
+                vram_mb = torch.cuda.max_memory_allocated(device) / (1024 * 1024)
+                vram_pct = vram_mb / (torch.cuda.get_device_properties(device).total_memory / (1024 * 1024)) * 100
+                util_est = min(100, vram_pct * 1.4)
+                gpu_info = f" | VRAM: {vram_mb:.0f} MB ({vram_pct:.0f}%) | Util: ~{util_est:.0f}%"
+                torch.cuda.reset_peak_memory_stats(device)
             print(f"  Epoch {epoch}/{config.epochs} | Loss: {avg_loss:.4f} | "
-                  f"Spam F1: {epoch_f1:.4f} | {ram_report('')}")
+                  f"Spam F1: {epoch_f1:.4f}{gpu_info} | {ram_report('')}")
             if epoch_f1 > best_f1:
                 best_f1 = epoch_f1
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                if ckpt_path is not None:
-                    torch.save(best_state, ckpt_path)
-                    print(f"  Checkpoint saved to {ckpt_path}")
+                if checkpoint_path is not None:
+                    torch.save(best_state, checkpoint_path)
+                    print(f"  Best model saved to {checkpoint_path}")
+            if resume_ckpt_path is not None:
+                ckpt_data = {
+                    "epoch": epoch,
+                    "model_state_dict": {k: v.cpu().clone() for k, v in model.state_dict().items()},
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "best_f1": best_f1,
+                    "best_model_state_dict": best_state,
+                    "rng_state": random.getstate(),
+                    "config_model_name": config.model_name,
+                }
+                if scaler is not None:
+                    ckpt_data["scaler_state_dict"] = scaler.state_dict()
+                torch.save(ckpt_data, resume_ckpt_path)
 
     if best_state is not None:
-        model.load_state_dict(best_state)
+        model.load_state_dict(_normalize_state_dict(best_state, use_ddp and ddp_model is not None))
     elif use_ddp:
         if is_main:
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
     train_time = time.perf_counter() - t0
 
-    probs, labels = evaluate_model(model, test_loader, device)
-    preds = probs.argmax(axis=1)
+    if is_main:
+        probs, labels = evaluate_model(model, test_loader, device)
+        preds = probs.argmax(axis=1)
+    else:
+        probs = None
+        labels = None
+        preds = None
+
+    if use_ddp:
+        dist.barrier()
 
     if not is_main:
         return EvalMetrics(model_name=config.model_name, accuracy=0, spam_precision=0,
@@ -768,7 +927,8 @@ def train_transformer(
     return metrics, package_info, model, tokenizer
 
 
-def get_transformer_config(model_name: str, fast_dev_run: bool = False) -> TransformerConfig:
+def get_transformer_config(model_name: str, fast_dev_run: bool = False,
+                           resume_from: str | None = None) -> TransformerConfig:
     model_id = MODEL_IDS.get(model_name)
     if model_id is None:
         raise ValueError(f"Unknown model: {model_name}. Choose from: {list(MODEL_IDS)}")
@@ -793,4 +953,5 @@ def get_transformer_config(model_name: str, fast_dev_run: bool = False) -> Trans
         fast_dev_run=fast_dev_run,
         auto_batch_size=torch.cuda.is_available(),
         compile_model=torch.cuda.is_available() and hasattr(torch, 'compile'),
+        resume_from=resume_from,
     )

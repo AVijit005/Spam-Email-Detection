@@ -17,6 +17,7 @@ import scipy.sparse as sp
 from sklearn.base import clone
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import train_test_split
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
@@ -37,8 +38,8 @@ COMPETITION_WORD_MIN_DF = 10
 COMPETITION_WORD_MAX_DF = 0.60
 
 OPTUNA_TRIALS = 30
-OPTUNA_TIMEOUT_SECONDS = 2400
-OPTUNA_COMPETITION_TIMEOUT = 3600
+OPTUNA_TIMEOUT_SECONDS = 1200
+OPTUNA_COMPETITION_TIMEOUT = 2400
 
 OPTUNA_N_ESTIMATORS_LOW = 200
 OPTUNA_N_ESTIMATORS_HIGH = 600
@@ -110,6 +111,10 @@ def _optimize_xgboost(
     depth_low, depth_high = OPTUNA_MAX_DEPTH_LOW, OPTUNA_MAX_DEPTH_HIGH
     col_low, col_high = OPTUNA_COLSAMPLE_LOW, OPTUNA_COLSAMPLE_HIGH
 
+    x_tr, x_val, y_tr, y_val, sw_tr, sw_val = train_test_split(
+        x_train, y_train, sw_train, test_size=0.2, stratify=y_train, random_state=42,
+    )
+
     def objective(trial):
         params = {
             "n_estimators": trial.suggest_int("n_estimators", n_est_low, n_est_high),
@@ -127,16 +132,16 @@ def _optimize_xgboost(
             "tree_method": "hist",
         }
         model = xgb.XGBClassifier(**params)
-        model.fit(x_train, y_train, sample_weight=sw_train, eval_set=[(x_train, y_train)], verbose=False)
-        probs = model.predict_proba(x_train)[:, 1]
+        model.fit(x_tr, y_tr, sample_weight=sw_tr, eval_set=[(x_val, y_val)], verbose=False)
+        probs = model.predict_proba(x_val)[:, 1]
         from sklearn.metrics import f1_score
-        return f1_score(y_train, probs >= 0.5, pos_label=1)
+        return f1_score(y_val, probs >= 0.5, pos_label=1)
 
     print(f"  Optimizing XGBoost hyperparameters (Optuna, {timeout}s timeout)...")
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=OPTUNA_TRIALS, timeout=timeout, n_jobs=1,
                    show_progress_bar=False)
-    print(f"  Best trial F1: {study.best_value:.4f}")
+    print(f"  Best trial F1 (validation): {study.best_value:.4f}")
     params = study.best_params
     params["random_state"] = 42
     params["n_jobs"] = -1
@@ -158,6 +163,10 @@ def _optimize_lightgbm(
         return {"n_estimators": 500, "max_depth": 10, "num_leaves": 127,
                 "learning_rate": 0.05}
 
+    x_tr, x_val, y_tr, y_val, sw_tr, sw_val = train_test_split(
+        x_train, y_train, sw_train, test_size=0.2, stratify=y_train, random_state=42,
+    )
+
     def objective(trial):
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 200, 800),
@@ -175,16 +184,16 @@ def _optimize_lightgbm(
             "verbose": -1,
         }
         model = lgb.LGBMClassifier(**params)
-        model.fit(x_train, y_train, sample_weight=sw_train)
+        model.fit(x_tr, y_tr, sample_weight=sw_tr)
         from sklearn.metrics import f1_score
-        preds = model.predict(x_train)
-        return f1_score(y_train, preds, pos_label=1)
+        preds = model.predict(x_val)
+        return f1_score(y_val, preds, pos_label=1)
 
     print("  Optimizing LightGBM hyperparameters (Optuna)...")
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=OPTUNA_TRIALS, timeout=OPTUNA_TIMEOUT_SECONDS, n_jobs=1,
                    show_progress_bar=False)
-    print(f"  Best trial F1: {study.best_value:.4f}")
+    print(f"  Best trial F1 (validation): {study.best_value:.4f}")
     params = study.best_params
     params["class_weight"] = "balanced"
     params["random_state"] = 42
