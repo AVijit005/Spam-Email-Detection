@@ -34,6 +34,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors.torch import save_file, load_file
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -581,6 +582,16 @@ def _load_checkpoint_state(
     scheduler.load_state_dict(resume_data["scheduler_state_dict"])
     if scaler is not None and "scaler_state_dict" in resume_data:
         scaler.load_state_dict(resume_data["scaler_state_dict"])
+    rng = resume_data.get("rng_state")
+    if rng is not None:
+        if isinstance(rng, dict):
+            random.setstate(rng["python"])
+            np.random.set_state(rng["numpy"])
+            torch.set_rng_state(rng["torch"])
+            if rng.get("torch_cuda") and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(rng["torch_cuda"])
+        else:
+            random.setstate(rng)
     best = resume_data.get("best_model_state_dict")
     if best is not None and is_ddp:
         best = _normalize_state_dict(best, is_ddp)
@@ -648,29 +659,46 @@ def train_transformer(
     if token_cache_dir:
         train_cache = token_cache_dir / "train_tokenized.pt"
         test_cache = token_cache_dir / "test_tokenized.pt"
+        train_safe = train_cache.with_suffix(".safetensors")
+        test_safe = test_cache.with_suffix(".safetensors")
         if is_main:
             token_cache_dir.mkdir(parents=True, exist_ok=True)
-            if train_cache.exists() and test_cache.exists():
+            if train_safe.exists() and test_safe.exists():
+                train_data = load_file(train_safe)
+                test_data = load_file(test_safe)
+                train_ids, train_mask = train_data["input_ids"].numpy(), train_data["attention_mask"].numpy()
+                test_ids, test_mask = test_data["input_ids"].numpy(), test_data["attention_mask"].numpy()
+                if is_main:
+                    print(f"  Token cache loaded from {token_cache_dir} (safetensors)")
+            elif train_cache.exists() and test_cache.exists():
                 train_ids, train_mask = torch.load(train_cache, map_location="cpu", weights_only=False)
                 test_ids, test_mask = torch.load(test_cache, map_location="cpu", weights_only=False)
-                train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=False)
-                test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=False)
-                train_ds._pre_tokenized = (train_ids, train_mask)
-                test_ds._pre_tokenized = (test_ids, test_mask)
+                save_file({"input_ids": torch.from_numpy(train_ids), "attention_mask": torch.from_numpy(train_mask)}, train_safe)
+                save_file({"input_ids": torch.from_numpy(test_ids), "attention_mask": torch.from_numpy(test_mask)}, test_safe)
+                train_cache.unlink(missing_ok=True)
+                test_cache.unlink(missing_ok=True)
                 if is_main:
-                    print(f"  Token cache loaded from {token_cache_dir}")
+                    print(f"  Token cache migrated {token_cache_dir}: .pt → .safetensors")
             else:
                 train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=True)
                 test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=True)
-                torch.save(train_ds._pre_tokenized, train_cache)
-                torch.save(test_ds._pre_tokenized, test_cache)
+                train_ids, train_mask = train_ds._pre_tokenized
+                test_ids, test_mask = test_ds._pre_tokenized
+                save_file({"input_ids": torch.from_numpy(train_ids), "attention_mask": torch.from_numpy(train_mask)}, train_safe)
+                save_file({"input_ids": torch.from_numpy(test_ids), "attention_mask": torch.from_numpy(test_mask)}, test_safe)
                 if is_main:
-                    print(f"  Token cache saved to {token_cache_dir}")
+                    print(f"  Token cache saved to {token_cache_dir} (safetensors)")
+            train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=False)
+            test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=False)
+            train_ds._pre_tokenized = (train_ids, train_mask)
+            test_ds._pre_tokenized = (test_ids, test_mask)
         if use_ddp:
             dist.barrier()
         if not is_main:
-            train_ids, train_mask = torch.load(train_cache, map_location="cpu", weights_only=False)
-            test_ids, test_mask = torch.load(test_cache, map_location="cpu", weights_only=False)
+            train_data = load_file(train_safe)
+            test_data = load_file(test_safe)
+            train_ids, train_mask = train_data["input_ids"].numpy(), train_data["attention_mask"].numpy()
+            test_ids, test_mask = test_data["input_ids"].numpy(), test_data["attention_mask"].numpy()
             train_ds = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=False)
             test_ds = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=False)
             train_ds._pre_tokenized = (train_ids, train_mask)
@@ -810,9 +838,38 @@ def train_transformer(
             train_dataset.set_difficulty(np.zeros(len(train_texts)))
             active_loader = train_loader
 
-        avg_loss = train_epoch(model, active_loader, optimizer, scheduler, criterion, device,
-                               fgm, scaler, grad_accum=config.gradient_accumulation_steps,
-                               ddp_model=ddp_model)
+        max_oom_retries = 1
+        for retry in range(max_oom_retries + 1):
+            try:
+                avg_loss = train_epoch(model, active_loader, optimizer, scheduler, criterion, device,
+                                       fgm, scaler, grad_accum=config.gradient_accumulation_steps,
+                                       ddp_model=ddp_model)
+                break
+            except torch.cuda.OutOfMemoryError:
+                if retry >= max_oom_retries or active_loader is sub_loader:
+                    raise
+                torch.cuda.empty_cache()
+                optimizer.zero_grad(set_to_none=True)
+                new_batch = max(batch_size // 2, 4)
+                if is_main:
+                    print(f"  OOM on epoch {epoch} — reducing batch size {batch_size} → {new_batch}")
+                batch_size = new_batch
+                train_loader = DataLoader(
+                    train_dataset, batch_size=batch_size,
+                    sampler=train_sampler, shuffle=(train_sampler is None),
+                    num_workers=min(optimal_workers, 4), pin_memory=torch.cuda.is_available(),
+                    persistent_workers=True, prefetch_factor=4, drop_last=False,
+                )
+                test_loader = DataLoader(
+                    test_dataset, batch_size=batch_size * 2, shuffle=False,
+                    num_workers=2, pin_memory=torch.cuda.is_available(),
+                    persistent_workers=True, prefetch_factor=4,
+                )
+                active_loader = train_loader
+                if train_sampler is not None:
+                    train_sampler.set_epoch(epoch)
+                if is_main:
+                    print(f"  Retrying epoch {epoch} with batch_size={batch_size}")
 
         if is_main:
             probs, labels = evaluate_model(model, test_loader, device)
@@ -849,7 +906,12 @@ def train_transformer(
                     "scheduler_state_dict": scheduler.state_dict(),
                     "best_f1": best_f1,
                     "best_model_state_dict": best_state,
-                    "rng_state": random.getstate(),
+                    "rng_state": {
+                        "python": random.getstate(),
+                        "numpy": np.random.get_state(),
+                        "torch": torch.get_rng_state(),
+                        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                    },
                     "config_model_name": config.model_name,
                 }
                 if scaler is not None:
