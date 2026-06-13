@@ -22,6 +22,7 @@ import os
 import sys
 import time
 from contextlib import nullcontext
+from datetime import timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -122,7 +123,7 @@ def _get_ddp_config() -> tuple[bool, int, int]:
         return False, local_rank, 1
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     return True, local_rank, world_size
 
 

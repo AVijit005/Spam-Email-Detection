@@ -24,7 +24,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +50,32 @@ def _init_ddp() -> tuple[bool, int, int]:
         return False, local_rank, 1
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", timeout=timedelta(hours=2),
+                                init_method="env://")
+    dummy = torch.zeros(1, device=f"cuda:{local_rank}")
+    dist.all_reduce(dummy)
     return True, local_rank, world_size
+
+
+def _fs_barrier() -> None:
+    """File-system based barrier for cross-stage sync. Does NOT rely on NCCL."""
+    import tempfile
+    _signal_dir = Path(tempfile.gettempdir()) / "spam_ddp_signals"
+    _signal_dir.mkdir(parents=True, exist_ok=True)
+    rank = os.environ.get("LOCAL_RANK", "0")
+    world_s = os.environ.get("WORLD_SIZE", "1")
+    signal_file = _signal_dir / f"barrier_{world_s}r.txt"
+    my_file = _signal_dir / f"rank_{rank}_ready.txt"
+    my_file.touch()
+    while True:
+        ready = sum(1 for r in range(int(world_s)) if (_signal_dir / f"rank_{r}_ready.txt").exists())
+        if ready >= int(world_s):
+            break
+        time.sleep(2)
+    if int(rank) == 0:
+        for r in range(int(world_s)):
+            (_signal_dir / f"rank_{r}_ready.txt").unlink(missing_ok=True)
+        signal_file.touch()
 
 
 def _is_ddp_initialized() -> bool:
@@ -276,7 +300,7 @@ def main() -> None:
         print(f"\n  Track A Winner: {best_metrics.model_name} → Spam F1 = {best_metrics.spam_f1:.4f}")
 
     if _is_ddp_initialized():
-        dist.barrier()
+        _fs_barrier()
 
     if not args.track_a_only:
         tb_metrics, package_info, t_model, t_tokenizer = run_track_b(
@@ -290,7 +314,7 @@ def main() -> None:
             transformer_package_info = package_info
 
     if _is_ddp_initialized():
-        dist.barrier()
+        _fs_barrier()
         if not is_main:
             dist.destroy_process_group()
             return
