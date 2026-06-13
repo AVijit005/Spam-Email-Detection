@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,9 +29,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from transformers import (
     AutoConfig, AutoModelForSequenceClassification, AutoTokenizer,
@@ -104,6 +108,29 @@ def _device() -> torch.device:
     if importlib.util.find_spec("torch_directml") is not None:
         return torch.device("directml")
     return torch.device("cpu")
+
+
+def _get_ddp_config() -> tuple[bool, int, int]:
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank == -1 or not torch.cuda.is_available():
+        return False, 0, 1
+    world_size = int(os.environ.get("WORLD_SIZE", int(torch.cuda.device_count())))
+    if world_size < 2:
+        return False, local_rank, 1
+    torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+    return True, local_rank, world_size
+
+
+def _get_rank() -> int:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return 0
+
+
+def _is_main_process() -> bool:
+    return _get_rank() == 0
 
 
 def _detect_environment() -> str:
@@ -227,17 +254,43 @@ def _load_transformer_assets(
 
 
 class EmailDataset(Dataset):
-    def __init__(self, texts: list[str], labels: np.ndarray, tokenizer, max_length: int):
+    def __init__(self, texts: list[str], labels: np.ndarray, tokenizer, max_length: int,
+                 pre_tokenize: bool = True):
         self.texts = texts
         self.labels = labels
         self.tokenizer = tokenizer
         self.max_length = max_length
         self._difficulty: np.ndarray | None = None
+        self._pre_tokenized: tuple[np.ndarray, np.ndarray] | None = None
+
+        if pre_tokenize:
+            self._pre_tokenize_all()
 
     def __len__(self):
         return len(self.texts)
 
+    def _pre_tokenize_all(self):
+        all_ids: list[np.ndarray] = []
+        all_masks: list[np.ndarray] = []
+        batch_size = 4096
+        for i in range(0, len(self.texts), batch_size):
+            batch = self.texts[i:i + batch_size]
+            enc = self.tokenizer(
+                batch, truncation=True, padding="max_length",
+                max_length=self.max_length, return_tensors="np",
+            )
+            all_ids.append(enc["input_ids"])
+            all_masks.append(enc["attention_mask"])
+        self._pre_tokenized = (np.concatenate(all_ids), np.concatenate(all_masks))
+
     def __getitem__(self, idx):
+        if self._pre_tokenized is not None and self._difficulty is None:
+            input_ids, attn_mask = self._pre_tokenized
+            return {
+                "input_ids": torch.tensor(input_ids[idx], dtype=torch.long),
+                "attention_mask": torch.tensor(attn_mask[idx], dtype=torch.long),
+                "labels": torch.tensor(self.labels[idx], dtype=torch.long),
+            }
         text = self.texts[idx]
         if self._difficulty is not None:
             text = f"Difficulty: {self._difficulty[idx]:.2f}. {text}"
@@ -340,39 +393,46 @@ def train_epoch(
     device: torch.device,
     fgm: FGM | None = None,
     scaler: Any | None = None,
+    grad_accum: int = GRADIENT_ACCUMULATION_STEPS,
+    ddp_model: Any | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
     optimizer.zero_grad()
+    rank = _get_rank()
 
-    for step, batch in enumerate(tqdm(loader, desc="Training", leave=False)):
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch["attention_mask"].to(device)
-        labels = batch["labels"].to(device)
+    for step, batch in enumerate(tqdm(loader, desc="Training", leave=False, disable=(rank != 0))):
+        input_ids = batch["input_ids"].to(device, non_blocking=True)
+        attention_mask = batch["attention_mask"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
 
-        with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu", enabled=scaler is not None):
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            loss = criterion(outputs.logits, labels) / GRADIENT_ACCUMULATION_STEPS
+        is_accum_boundary = (step + 1) % grad_accum == 0 or (step + 1) == len(loader)
+        sync_ctx = ddp_model.no_sync() if ddp_model is not None and not is_accum_boundary else nullcontext()
 
-        if scaler is not None:
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
-
-        if fgm is not None:
-            fgm.attack()
+        with sync_ctx:
             with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu", enabled=scaler is not None):
-                adv_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-                adv_loss = ADVERSARIAL_ALPHA * criterion(adv_outputs.logits, labels) / GRADIENT_ACCUMULATION_STEPS
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                loss = criterion(outputs.logits, labels) / grad_accum
+
             if scaler is not None:
-                scaler.scale(adv_loss).backward()
+                scaler.scale(loss).backward()
             else:
-                adv_loss.backward()
-            fgm.restore()
+                loss.backward()
 
-        total_loss += loss.item() * GRADIENT_ACCUMULATION_STEPS
+            if fgm is not None:
+                fgm.attack()
+                with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu", enabled=scaler is not None):
+                    adv_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                    adv_loss = ADVERSARIAL_ALPHA * criterion(adv_outputs.logits, labels) / grad_accum
+                if scaler is not None:
+                    scaler.scale(adv_loss).backward()
+                else:
+                    adv_loss.backward()
+                fgm.restore()
 
-        if (step + 1) % GRADIENT_ACCUMULATION_STEPS == 0:
+        total_loss += loss.item() * grad_accum
+
+        if is_accum_boundary:
             if scaler is not None:
                 scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
@@ -384,18 +444,6 @@ def train_epoch(
             scheduler.step()
             optimizer.zero_grad()
 
-    if len(loader) % GRADIENT_ACCUMULATION_STEPS != 0:
-        if scaler is not None:
-            scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
-        if scaler is not None:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad()
-
     return total_loss / len(loader)
 
 
@@ -406,18 +454,23 @@ def evaluate_model(
     device: torch.device,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
-    all_preds, all_labels = [], []
-    for batch in tqdm(loader, desc="Evaluating", leave=False):
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch["attention_mask"].to(device)
-        labels = batch["labels"].to(device)
+    all_preds: list[torch.Tensor] = []
+    all_labels: list[torch.Tensor] = []
+    rank = _get_rank()
+
+    for batch in tqdm(loader, desc="Evaluating", leave=False, disable=(rank != 0)):
+        input_ids = batch["input_ids"].to(device, non_blocking=True)
+        attention_mask = batch["attention_mask"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-        all_preds.append(outputs.logits.cpu())
-        all_labels.append(labels.cpu())
+        all_preds.append(outputs.logits)
+        all_labels.append(labels)
+
     logits = torch.cat(all_preds)
     labels = torch.cat(all_labels)
+
     probs = torch.softmax(logits, dim=-1)
-    return probs.numpy(), labels.numpy()
+    return probs.cpu().numpy(), labels.cpu().numpy()
 
 
 def train_transformer(
@@ -427,19 +480,33 @@ def train_transformer(
     *,
     checkpoint_dir: str | None = None,
 ) -> tuple[EvalMetrics, dict[str, Any], Any, Any]:
-    print("\n" + "=" * 60)
-    print(f"  TRACK B — Transformer Fine-Tuning: {config.model_name}")
-    print(f"  Model ID: {config.model_id}")
-    if config.fast_dev_run:
-        print("  FAST DEV RUN — 500 samples only")
-    print("=" * 60)
+    use_ddp, local_rank, world_size = _get_ddp_config()
+    is_main = _is_main_process()
+
+    if is_main:
+        print("\n" + "=" * 60)
+        print(f"  TRACK B — Transformer Fine-Tuning: {config.model_name}")
+        print(f"  Model ID: {config.model_id}")
+        if config.fast_dev_run:
+            print("  FAST DEV RUN — 500 samples only")
+        if use_ddp:
+            print(f"  DDP: {world_size} GPUs (rank {local_rank})")
+        print("=" * 60)
 
     env = _detect_environment()
     tokenizer, hf_config, model, device = _load_transformer_assets(config, env)
-    print(f"  Device: {device}")
-    print(f"  FP16: {config.fp16 and device.type == 'cuda'}")
-    if env != "online":
-        print(f"  Env: {env} — offline, using cached model only")
+
+    if is_main:
+        print(f"  Device: {device}")
+        print(f"  FP16: {config.fp16 and device.type == 'cuda'}")
+        if env != "online":
+            print(f"  Env: {env} — offline, using cached model only")
+
+    ddp_model = None
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank,
+                    find_unused_parameters=False)
+        ddp_model = model
 
     if config.fast_dev_run:
         train_df = train_df.sample(n=min(500, len(train_df)), random_state=42)
@@ -450,23 +517,32 @@ def train_transformer(
     y_train = train_df["label"].values
     y_test = test_df["label"].values
 
-    train_dataset = EmailDataset(train_texts, y_train, tokenizer, config.max_length)
-    test_dataset = EmailDataset(test_texts, y_test, tokenizer, config.max_length)
+    train_dataset = EmailDataset(train_texts, y_train, tokenizer, config.max_length, pre_tokenize=True)
+    test_dataset = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=True)
+
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank,
+                                       shuffle=True) if use_ddp else None
 
     train_loader = DataLoader(
-        train_dataset, batch_size=config.batch_size, shuffle=True,
-        num_workers=2, pin_memory=(device.type == "cuda"),
+        train_dataset, batch_size=config.batch_size,
+        sampler=train_sampler, shuffle=(train_sampler is None),
+        num_workers=4, pin_memory=(device.type == "cuda"),
+        persistent_workers=True, prefetch_factor=4,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=config.batch_size * 2, shuffle=False,
         num_workers=2, pin_memory=(device.type == "cuda"),
+        persistent_workers=True, prefetch_factor=4,
     )
 
-    print(f"  Train batches: {len(train_loader)} (effective batch={config.batch_size * config.gradient_accumulation_steps})")
-    print(f"  Test batches:  {len(test_loader)}")
-    print(f"  Total layers:  {hf_config.num_hidden_layers}")
-    print(ram_report("Before model load"))
-    print(ram_report("After model load"))
+    if is_main:
+        effective_batch = config.batch_size * world_size * config.gradient_accumulation_steps
+        print(f"  Train batches: {len(train_loader)}/gpu (effective batch={effective_batch} "
+              f"= {config.batch_size} × {world_size}gpu × {config.gradient_accumulation_steps}accum)")
+        print(f"  Test batches:  {len(test_loader)}")
+        print(f"  Total layers:  {hf_config.num_hidden_layers}")
+        print(ram_report("Before model load"))
+        print(ram_report("After model load"))
 
     criterion = FocalLoss(alpha=config.focal_alpha, gamma=config.focal_gamma, reduction="mean")
     fgm = FGM(model, epsilon=config.adversarial_epsilon) if config.adversarial_epsilon > 0 else None
@@ -485,75 +561,90 @@ def train_transformer(
 
     scaler = torch.amp.GradScaler("cuda") if config.fp16 and device.type == "cuda" else None
 
-    print(f"\n  Training {config.epochs} epochs...")
-    print(f"  Steps: {total_steps} | Warmup: {warmup_steps} | Focal γ={config.focal_gamma}")
-
-    if config.curriculum_epochs > 0:
-        print(f"  Curriculum: {config.curriculum_epochs} epochs starting with "
-              f"{config.curriculum_easy_frac:.0%} easy samples")
+    if is_main:
+        print(f"\n  Training {config.epochs} epochs...")
+        print(f"  Steps/rank: {total_steps} | Warmup: {warmup_steps} | Focal γ={config.focal_gamma}")
+        if config.curriculum_epochs > 0:
+            print(f"  Curriculum: {config.curriculum_epochs} epochs starting with "
+                  f"{config.curriculum_easy_frac:.0%} easy samples")
 
     t0 = time.perf_counter()
     best_f1 = 0.0
     best_state = None
     ckpt_path = None
-    if checkpoint_dir:
+    if checkpoint_dir and is_main:
         ckpt_path = Path(checkpoint_dir) / f"{config.model_name}_best.pt"
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, config.epochs + 1):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+
         if config.curriculum_epochs > 0 and epoch <= config.curriculum_epochs:
             difficulties = _compute_difficulty_scores(train_texts)
             sorted_idx = np.argsort(difficulties)
             keep_n = int(len(sorted_idx) * config.curriculum_easy_frac)
             easy_idx = sorted_idx[:keep_n]
             train_dataset.set_difficulty(difficulties)
+            sub_dataset = torch.utils.data.Subset(train_dataset, easy_idx)
             sub_loader = DataLoader(
-                torch.utils.data.Subset(train_dataset, easy_idx),
-                batch_size=config.batch_size, shuffle=True,
-                num_workers=2, pin_memory=(device.type == "cuda"),
+                sub_dataset, batch_size=config.batch_size, shuffle=True,
+                num_workers=4, pin_memory=(device.type == "cuda"),
+                persistent_workers=True, prefetch_factor=4,
             )
             active_loader = sub_loader
-            print(f"  Curriculum epoch {epoch}/{config.curriculum_epochs}: "
-                  f"using {keep_n}/{len(train_texts)} easiest samples")
+            if is_main:
+                print(f"  Curriculum epoch {epoch}/{config.curriculum_epochs}: "
+                      f"using {keep_n}/{len(train_texts)} easiest samples")
         else:
             train_dataset.set_difficulty(np.zeros(len(train_texts)))
             active_loader = train_loader
 
-        avg_loss = train_epoch(model, active_loader, optimizer, scheduler, criterion, device, fgm, scaler)
+        avg_loss = train_epoch(model, active_loader, optimizer, scheduler, criterion, device,
+                               fgm, scaler, grad_accum=config.gradient_accumulation_steps,
+                               ddp_model=ddp_model)
 
         probs, labels = evaluate_model(model, test_loader, device)
         preds = probs.argmax(axis=1)
         from sklearn.metrics import f1_score
         epoch_f1 = f1_score(labels, preds, pos_label=1)
 
-        print(f"  Epoch {epoch}/{config.epochs} | Loss: {avg_loss:.4f} | "
-              f"Spam F1: {epoch_f1:.4f} | {ram_report('')}")
-
-        if epoch_f1 > best_f1:
-            best_f1 = epoch_f1
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            if ckpt_path is not None:
-                torch.save(best_state, ckpt_path)
-                print(f"  Checkpoint saved to {ckpt_path}")
+        if is_main:
+            print(f"  Epoch {epoch}/{config.epochs} | Loss: {avg_loss:.4f} | "
+                  f"Spam F1: {epoch_f1:.4f} | {ram_report('')}")
+            if epoch_f1 > best_f1:
+                best_f1 = epoch_f1
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                if ckpt_path is not None:
+                    torch.save(best_state, ckpt_path)
+                    print(f"  Checkpoint saved to {ckpt_path}")
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    elif use_ddp:
+        if is_main:
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
     train_time = time.perf_counter() - t0
 
-    final_probs, final_labels = evaluate_model(model, test_loader, device)
-    final_preds = final_probs.argmax(axis=1)
+    probs, labels = evaluate_model(model, test_loader, device, ddp_world_size=world_size)
+    preds = probs.argmax(axis=1)
+
+    if not is_main:
+        return EvalMetrics(model_name=config.model_name, accuracy=0, spam_precision=0,
+                          spam_recall=0, spam_f1=0, roc_auc=None, train_time_seconds=train_time,
+                          support=0, track="transformer", eval_method="holdout"), {}, model, tokenizer
 
     from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
-    report = classification_report(final_labels, final_preds, target_names=["Ham", "Spam"],
+    report = classification_report(labels, preds, target_names=["Ham", "Spam"],
                                    output_dict=True, zero_division=0)
     try:
-        roc_auc = float(roc_auc_score(final_labels, final_probs[:, 1]))
+        roc_auc = float(roc_auc_score(labels, probs[:, 1]))
     except ValueError:
         roc_auc = None
 
     spam_metrics = report["Spam"]
-    cm = confusion_matrix(final_labels, final_preds)
+    cm = confusion_matrix(labels, preds)
 
     metrics = EvalMetrics(
         model_name=config.model_name,

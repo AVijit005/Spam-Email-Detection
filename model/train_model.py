@@ -34,8 +34,10 @@ import scipy.sparse as sp
 
 try:
     import torch
+    import torch.distributed as dist
 except ImportError:
     torch = None
+    dist = None
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
@@ -206,9 +208,19 @@ def main() -> None:
     args = _parse_args()
     t_start = time.perf_counter()
 
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    use_ddp = local_rank != -1 and torch is not None and torch.cuda.is_available()
+    is_main = not use_ddp or local_rank == 0
+
+    if torch is not None and torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     csv_path = Path(args.csv_path) if args.csv_path else _discover_csv()
     output_dir = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "model"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if is_main:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     df = load_and_preprocess(csv_path, fast_dev=args.fast_dev)
     train_df, test_df = split_data(df)
@@ -225,7 +237,7 @@ def main() -> None:
     transformer_tokenizer = None
     transformer_package_info = None
 
-    if not args.track_b_only:
+    if not args.track_b_only and is_main:
         print("\n" + "=" * 60)
         print("  STAGE 2 — Classical ML (Track A)")
         print("=" * 60)
@@ -246,16 +258,25 @@ def main() -> None:
         print(ram_report("After Track A"))
         print(f"\n  Track A Winner: {best_metrics.model_name} → Spam F1 = {best_metrics.spam_f1:.4f}")
 
+    if use_ddp:
+        dist.barrier()
+
     if not args.track_a_only:
         tb_metrics, package_info, t_model, t_tokenizer = run_track_b(
             train_df, test_df, args.model, args.fast_dev,
         )
-        if tb_metrics is not None:
+        if is_main and tb_metrics is not None:
             all_metrics.append(tb_metrics)
             track_b_metrics = tb_metrics
             transformer_model = t_model
             transformer_tokenizer = t_tokenizer
             transformer_package_info = package_info
+
+    if use_ddp:
+        dist.barrier()
+        if not is_main:
+            dist.destroy_process_group()
+            return
 
     if all_metrics:
         print_leaderboard(all_metrics)
