@@ -24,7 +24,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,40 +40,25 @@ except ImportError:
     dist = None
 
 
-def _init_ddp() -> tuple[bool, int, int]:
-    """Initialize DDP process group from torchrun env vars. Must be called once at startup."""
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if local_rank == -1 or torch is None or not torch.cuda.is_available():
-        return False, 0, 1
-    world_size = int(os.environ.get("WORLD_SIZE", int(torch.cuda.device_count())))
-    if world_size < 2:
-        return False, local_rank, 1
-    torch.cuda.set_device(local_rank)
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl", timeout=timedelta(hours=2),
-                                init_method="env://")
-    dummy = torch.zeros(1, device=f"cuda:{local_rank}")
-    dist.all_reduce(dummy)
-    return True, local_rank, world_size
-
-
 def _fs_barrier() -> None:
     """File-system based barrier for cross-stage sync. Does NOT rely on NCCL."""
+    rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_s = int(os.environ.get("WORLD_SIZE", 1))
+    if world_s < 2:
+        return
     import tempfile
     _signal_dir = Path(tempfile.gettempdir()) / "spam_ddp_signals"
     _signal_dir.mkdir(parents=True, exist_ok=True)
-    rank = os.environ.get("LOCAL_RANK", "0")
-    world_s = os.environ.get("WORLD_SIZE", "1")
     signal_file = _signal_dir / f"barrier_{world_s}r.txt"
     my_file = _signal_dir / f"rank_{rank}_ready.txt"
     my_file.touch()
     while True:
-        ready = sum(1 for r in range(int(world_s)) if (_signal_dir / f"rank_{r}_ready.txt").exists())
-        if ready >= int(world_s):
+        ready = sum(1 for r in range(world_s) if (_signal_dir / f"rank_{r}_ready.txt").exists())
+        if ready >= world_s:
             break
         time.sleep(2)
-    if int(rank) == 0:
-        for r in range(int(world_s)):
+    if rank == 0:
+        for r in range(world_s):
             (_signal_dir / f"rank_{r}_ready.txt").unlink(missing_ok=True)
         signal_file.touch()
 
@@ -250,8 +235,8 @@ def main() -> None:
     args = _parse_args()
     t_start = time.perf_counter()
 
-    use_ddp, local_rank, world_size = _init_ddp()
-    is_main = not use_ddp or local_rank == 0
+    local_rank_env = int(os.environ.get("LOCAL_RANK", -1))
+    world_size_env = int(os.environ.get("WORLD_SIZE", 1))
 
     if torch is not None and torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -260,17 +245,37 @@ def main() -> None:
 
     csv_path = Path(args.csv_path) if args.csv_path else _discover_csv()
     output_dir = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "model"
-    if is_main:
-        output_dir.mkdir(parents=True, exist_ok=True)
 
-    df = load_and_preprocess(csv_path, fast_dev=args.fast_dev)
-    train_df, test_df = split_data(df)
+    if local_rank_env in (-1, 0):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        df = load_and_preprocess(csv_path, fast_dev=args.fast_dev)
+        train_df, test_df = split_data(df)
+    else:
+        df = None
+        train_df = None
+        test_df = None
+
+    use_ddp = local_rank_env != -1 and world_size_env >= 2 and torch is not None and torch.cuda.is_available()
+    is_main = not use_ddp or local_rank_env == 0
+
+    if use_ddp:
+        if local_rank_env != 0:
+            _fs_barrier()
+            csv_path = Path(args.csv_path) if args.csv_path else _discover_csv()
+            df = pd.read_csv(csv_path, encoding="utf-8", usecols=["label", "text"])
+            df.rename(columns={"text": "message"}, inplace=True)
+            df["label"] = df["label"].map({"spam": 1, "ham": 0}).fillna(0).astype(np.int32)
+            df.dropna(subset=["message"], inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            if args.fast_dev:
+                df = df.sample(n=min(500, len(df)), random_state=42).reset_index(drop=True)
+            train_df, test_df = split_data(df)
+            _fs_barrier()
 
     all_metrics: list[EvalMetrics] = []
     track_a_metrics: EvalMetrics | None = None
     track_b_metrics: EvalMetrics | None = None
 
-    classical_best_model = None
     classical_estimator = None
     classical_features_config = None
     classical_word_vec = None
@@ -299,7 +304,7 @@ def main() -> None:
         print(ram_report("After Track A"))
         print(f"\n  Track A Winner: {best_metrics.model_name} → Spam F1 = {best_metrics.spam_f1:.4f}")
 
-    if _is_ddp_initialized():
+    if use_ddp:
         _fs_barrier()
 
     if not args.track_a_only:
@@ -313,10 +318,11 @@ def main() -> None:
             transformer_tokenizer = t_tokenizer
             transformer_package_info = package_info
 
-    if _is_ddp_initialized():
+    if use_ddp:
+        if _is_ddp_initialized():
+            dist.destroy_process_group()
         _fs_barrier()
         if not is_main:
-            dist.destroy_process_group()
             return
 
     if all_metrics:

@@ -124,6 +124,8 @@ def _get_ddp_config() -> tuple[bool, int, int]:
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
         dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
+    dummy = torch.zeros(1, device=f"cuda:{local_rank}")
+    dist.all_reduce(dummy)
     return True, local_rank, world_size
 
 
@@ -608,12 +610,12 @@ def train_transformer(
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size,
         sampler=train_sampler, shuffle=(train_sampler is None),
-        num_workers=optimal_workers, pin_memory=(device.type == "cuda"),
+        num_workers=optimal_workers, pin_memory=torch.cuda.is_available(),
         persistent_workers=True, prefetch_factor=4, drop_last=True,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size * 2, shuffle=False,
-        num_workers=2, pin_memory=True,
+        num_workers=2, pin_memory=torch.cuda.is_available(),
         persistent_workers=False, prefetch_factor=4,
     )
 
