@@ -22,7 +22,7 @@ import os
 import sys
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +100,8 @@ class TransformerConfig:
     fp16: bool
     max_grad_norm: float
     fast_dev_run: bool = False
+    auto_batch_size: bool = False
+    compile_model: bool = False
 
 
 def _device() -> torch.device:
@@ -131,6 +133,66 @@ def _get_rank() -> int:
 
 def _is_main_process() -> bool:
     return _get_rank() == 0
+
+
+def _apply_fast_cuda() -> None:
+    if not torch.cuda.is_available():
+        return
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
+
+
+def _get_optimal_workers() -> int:
+    cpu_count = os.cpu_count() or 4
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        return min(max(cpu_count // (gpu_count * 2), 4), 8)
+    return min(cpu_count, 8)
+
+
+def _probe_vram_batch_size(
+    model: nn.Module,
+    tokenizer,
+    max_length: int,
+    device: torch.device,
+    start_batch: int = 8,
+    safety_margin: float = 0.85,
+) -> int:
+    total_vram = torch.cuda.get_device_properties(device).total_memory
+    target_vram = int(total_vram * safety_margin)
+    batch = start_batch
+    while True:
+        try:
+            torch.cuda.empty_cache()
+            dummy_ids = torch.randint(0, 1000, (batch, max_length), device=device)
+            dummy_mask = torch.ones((batch, max_length), device=device)
+            with torch.amp.autocast("cuda"):
+                outputs = model(input_ids=dummy_ids, attention_mask=dummy_mask)
+                loss = outputs.logits.sum()
+            loss.backward()
+            used = torch.cuda.max_memory_allocated(device)
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(device)
+            headroom = target_vram - used
+            extra = headroom // (used // batch) if used > 0 else 4
+            if extra >= 4:
+                batch = min(batch + int(extra), 128)
+            elif extra >= 1:
+                batch += 1
+            else:
+                break
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(device)
+            if batch <= 4:
+                return max(batch - 2, 1)
+            batch = max(batch // 2, start_batch)
+    model.zero_grad(set_to_none=True)
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats(device)
+    return batch
 
 
 def _detect_environment() -> str:
@@ -482,6 +544,7 @@ def train_transformer(
 ) -> tuple[EvalMetrics, dict[str, Any], Any, Any]:
     use_ddp, local_rank, world_size = _get_ddp_config()
     is_main = _is_main_process()
+    _apply_fast_cuda()
 
     if is_main:
         print("\n" + "=" * 60)
@@ -502,11 +565,27 @@ def train_transformer(
         if env != "online":
             print(f"  Env: {env} — offline, using cached model only")
 
+    batch_size = config.batch_size
+    if config.auto_batch_size and device.type == "cuda":
+        searched = _probe_vram_batch_size(model, tokenizer, config.max_length, device, start_batch=batch_size)
+        batch_size = searched
+        if is_main:
+            print(f"  Auto batch size: {config.batch_size} → {batch_size} (VRAM-optimized)")
+
     ddp_model = None
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], output_device=local_rank,
-                    find_unused_parameters=False)
+                    find_unused_parameters=False, broadcast_buffers=False,
+                    gradient_as_bucket_view=True)
         ddp_model = model
+
+    if config.compile_model and hasattr(torch, 'compile'):
+        model = torch.compile(model, mode="reduce-overhead")
+        if is_main:
+            print("  torch.compile: enabled (reduce-overhead)")
+
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
 
     if config.fast_dev_run:
         train_df = train_df.sample(n=min(500, len(train_df)), random_state=42)
@@ -521,25 +600,27 @@ def train_transformer(
     test_dataset = EmailDataset(test_texts, y_test, tokenizer, config.max_length, pre_tokenize=True)
 
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank,
-                                       shuffle=True) if use_ddp else None
+                                       shuffle=True, drop_last=True) if use_ddp else None
 
+    optimal_workers = _get_optimal_workers()
     train_loader = DataLoader(
-        train_dataset, batch_size=config.batch_size,
+        train_dataset, batch_size=batch_size,
         sampler=train_sampler, shuffle=(train_sampler is None),
-        num_workers=4, pin_memory=(device.type == "cuda"),
-        persistent_workers=True, prefetch_factor=4,
+        num_workers=optimal_workers, pin_memory=(device.type == "cuda"),
+        persistent_workers=True, prefetch_factor=4, drop_last=True,
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=config.batch_size * 2, shuffle=False,
-        num_workers=2, pin_memory=(device.type == "cuda"),
-        persistent_workers=True, prefetch_factor=4,
+        test_dataset, batch_size=batch_size * 2, shuffle=False,
+        num_workers=2, pin_memory=True,
+        persistent_workers=False, prefetch_factor=4,
     )
 
     if is_main:
-        effective_batch = config.batch_size * world_size * config.gradient_accumulation_steps
+        effective_batch = batch_size * world_size * config.gradient_accumulation_steps
         print(f"  Train batches: {len(train_loader)}/gpu (effective batch={effective_batch} "
-              f"= {config.batch_size} × {world_size}gpu × {config.gradient_accumulation_steps}accum)")
+              f"= {batch_size} × {world_size}gpu × {config.gradient_accumulation_steps}accum)")
         print(f"  Test batches:  {len(test_loader)}")
+        print(f"  Data workers:  {optimal_workers} (CPU cores: {os.cpu_count()})")
         print(f"  Total layers:  {hf_config.num_hidden_layers}")
         print(ram_report("Before model load"))
         print(ram_report("After model load"))
@@ -559,7 +640,8 @@ def train_transformer(
     warmup_steps = int(total_steps * config.warmup_ratio)
     scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
-    scaler = torch.amp.GradScaler("cuda") if config.fp16 and device.type == "cuda" else None
+    scaler = torch.amp.GradScaler("cuda", init_scale=16384.0,
+                                   growth_interval=2000) if config.fp16 and device.type == "cuda" else None
 
     if is_main:
         print(f"\n  Training {config.epochs} epochs...")
@@ -627,7 +709,7 @@ def train_transformer(
 
     train_time = time.perf_counter() - t0
 
-    probs, labels = evaluate_model(model, test_loader, device, ddp_world_size=world_size)
+    probs, labels = evaluate_model(model, test_loader, device)
     preds = probs.argmax(axis=1)
 
     if not is_main:
@@ -705,4 +787,6 @@ def get_transformer_config(model_name: str, fast_dev_run: bool = False) -> Trans
         fp16=FP16_ENABLED,
         max_grad_norm=MAX_GRAD_NORM,
         fast_dev_run=fast_dev_run,
+        auto_batch_size=torch.cuda.is_available(),
+        compile_model=torch.cuda.is_available() and hasattr(torch, 'compile'),
     )
