@@ -32,12 +32,21 @@ WORD_MIN_DF = 30
 WORD_MAX_DF = 0.70
 WORD_NGRAM = (1, 2)
 
-COMPETITION_WORD_MAX_FEATURES = 40000
-COMPETITION_WORD_MIN_DF = 15
+COMPETITION_WORD_MAX_FEATURES = 50000
+COMPETITION_WORD_MIN_DF = 10
 COMPETITION_WORD_MAX_DF = 0.60
 
 OPTUNA_TRIALS = 30
-OPTUNA_TIMEOUT_SECONDS = 1800
+OPTUNA_TIMEOUT_SECONDS = 2400
+OPTUNA_COMPETITION_TIMEOUT = 3600
+
+OPTUNA_N_ESTIMATORS_LOW = 200
+OPTUNA_N_ESTIMATORS_HIGH = 600
+OPTUNA_MAX_DEPTH_LOW = 6
+OPTUNA_MAX_DEPTH_HIGH = 14
+OPTUNA_COLSAMPLE_LOW = 0.3
+OPTUNA_COLSAMPLE_HIGH = 0.7
+OPTUNA_MIN_CHILD_WEIGHT_HIGH = 20
 
 
 def create_word_vectorizer(competition: bool = False) -> TfidfVectorizer:
@@ -87,6 +96,7 @@ def _optimize_xgboost(
     x_train: sp.csr_matrix,
     y_train: np.ndarray,
     sw_train: np.ndarray,
+    competition: bool = False,
 ) -> dict[str, Any]:
     try:
         import xgboost as xgb
@@ -95,19 +105,26 @@ def _optimize_xgboost(
         return {"n_estimators": 500, "max_depth": 10, "learning_rate": 0.05,
                 "subsample": 0.8, "colsample_bytree": 0.6}
 
+    timeout = OPTUNA_COMPETITION_TIMEOUT if competition else OPTUNA_TIMEOUT_SECONDS
+    n_est_low, n_est_high = OPTUNA_N_ESTIMATORS_LOW, OPTUNA_N_ESTIMATORS_HIGH
+    depth_low, depth_high = OPTUNA_MAX_DEPTH_LOW, OPTUNA_MAX_DEPTH_HIGH
+    col_low, col_high = OPTUNA_COLSAMPLE_LOW, OPTUNA_COLSAMPLE_HIGH
+
     def objective(trial):
         params = {
-            "n_estimators": trial.suggest_int("n_estimators", 200, 800),
-            "max_depth": trial.suggest_int("max_depth", 4, 12),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
-            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
-            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "n_estimators": trial.suggest_int("n_estimators", n_est_low, n_est_high),
+            "max_depth": trial.suggest_int("max_depth", depth_low, depth_high),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "subsample": trial.suggest_float("subsample", 0.5, 0.9),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", col_low, col_high),
+            "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.5, 0.9),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, OPTUNA_MIN_CHILD_WEIGHT_HIGH if competition else 10),
             "random_state": 42,
             "n_jobs": -1,
             "verbosity": 0,
+            "tree_method": "hist",
         }
         model = xgb.XGBClassifier(**params)
         model.fit(x_train, y_train, sample_weight=sw_train, eval_set=[(x_train, y_train)], verbose=False)
@@ -115,15 +132,17 @@ def _optimize_xgboost(
         from sklearn.metrics import f1_score
         return f1_score(y_train, probs >= 0.5, pos_label=1)
 
-    print("  Optimizing XGBoost hyperparameters (Optuna)...")
+    print(f"  Optimizing XGBoost hyperparameters (Optuna, {timeout}s timeout)...")
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=OPTUNA_TRIALS, timeout=OPTUNA_TIMEOUT_SECONDS, n_jobs=1,
+    study.optimize(objective, n_trials=OPTUNA_TRIALS, timeout=timeout, n_jobs=1,
                    show_progress_bar=False)
     print(f"  Best trial F1: {study.best_value:.4f}")
     params = study.best_params
     params["random_state"] = 42
     params["n_jobs"] = -1
     params["verbosity"] = 0
+    if "tree_method" in params:
+        del params["tree_method"]
     return params
 
 
@@ -192,7 +211,7 @@ def build_candidates(
     if x_train is not None and y_train is not None and not skip_optuna:
         try:
             import xgboost as xgb
-            xgb_params = _optimize_xgboost(x_train, y_train, sw_train)
+            xgb_params = _optimize_xgboost(x_train, y_train, sw_train, competition=competition)
             c["XGBoost"] = xgb.XGBClassifier(**xgb_params)
         except ImportError:
             try:

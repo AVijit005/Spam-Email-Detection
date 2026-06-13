@@ -70,13 +70,14 @@ MODEL_IDS: dict[str, str] = {
     "BERT": "bert-base-uncased",
     "RoBERTa": "roberta-base",
     "DeBERTa-v3": "microsoft/deberta-v3-base",
+    "DistilRoBERTa": "distilbert/distilroberta-base",
     "ELECTRA": "google/electra-base-discriminator",
     "ModernBERT": "answerdotai/ModernBERT-base",
 }
 
 MODEL_MAX_LENGTHS: dict[str, int] = {
-    "DeBERTa-v3": 512, "RoBERTa": 514, "ELECTRA": 512,
-    "ModernBERT": 8192, "DistilBERT": 512, "BERT": 512,
+    "DeBERTa-v3": 512, "DistilRoBERTa": 512, "RoBERTa": 514,
+    "ELECTRA": 512, "ModernBERT": 8192, "DistilBERT": 512, "BERT": 512,
 }
 
 
