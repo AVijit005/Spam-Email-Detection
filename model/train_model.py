@@ -39,6 +39,24 @@ except ImportError:
     torch = None
     dist = None
 
+
+def _init_ddp() -> tuple[bool, int, int]:
+    """Initialize DDP process group from torchrun env vars. Must be called once at startup."""
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank == -1 or torch is None or not torch.cuda.is_available():
+        return False, 0, 1
+    world_size = int(os.environ.get("WORLD_SIZE", int(torch.cuda.device_count())))
+    if world_size < 2:
+        return False, local_rank, 1
+    torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+    return True, local_rank, world_size
+
+
+def _is_ddp_initialized() -> bool:
+    return dist is not None and dist.is_available() and dist.is_initialized()
+
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -208,8 +226,7 @@ def main() -> None:
     args = _parse_args()
     t_start = time.perf_counter()
 
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    use_ddp = local_rank != -1 and torch is not None and torch.cuda.is_available()
+    use_ddp, local_rank, world_size = _init_ddp()
     is_main = not use_ddp or local_rank == 0
 
     if torch is not None and torch.cuda.is_available():
@@ -258,7 +275,7 @@ def main() -> None:
         print(ram_report("After Track A"))
         print(f"\n  Track A Winner: {best_metrics.model_name} → Spam F1 = {best_metrics.spam_f1:.4f}")
 
-    if use_ddp:
+    if _is_ddp_initialized():
         dist.barrier()
 
     if not args.track_a_only:
@@ -272,7 +289,7 @@ def main() -> None:
             transformer_tokenizer = t_tokenizer
             transformer_package_info = package_info
 
-    if use_ddp:
+    if _is_ddp_initialized():
         dist.barrier()
         if not is_main:
             dist.destroy_process_group()
