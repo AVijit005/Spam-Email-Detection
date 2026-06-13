@@ -17,7 +17,6 @@ import scipy.sparse as sp
 from sklearn.base import clone
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import SGDClassifier
-from sklearn.neural_network import MLPClassifier
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
@@ -180,6 +179,7 @@ def build_candidates(
     x_train: sp.csr_matrix | None = None,
     y_train: np.ndarray | None = None,
     sw_train: np.ndarray | None = None,
+    skip_optuna: bool = False,
 ) -> dict[str, Any]:
     c = {
         "SGDClassifier": SGDClassifier(
@@ -187,21 +187,9 @@ def build_candidates(
             l1_ratio=0.15, max_iter=1000, tol=1e-3,
             class_weight="balanced", random_state=42, n_jobs=-1,
         ),
-        "MLPClassifier": MLPClassifier(
-            hidden_layer_sizes=(128, 64, 32), activation="relu",
-            solver="adam", max_iter=200, early_stopping=True,
-            validation_fraction=0.1, random_state=42,
-        ),
     }
 
-    if competition:
-        c["MLPClassifier_deep"] = MLPClassifier(
-            hidden_layer_sizes=(256, 128, 64, 32), activation="relu",
-            solver="adam", max_iter=300, early_stopping=True,
-            validation_fraction=0.1, random_state=42,
-        )
-
-    if x_train is not None and y_train is not None:
+    if x_train is not None and y_train is not None and not skip_optuna:
         try:
             import xgboost as xgb
             xgb_params = _optimize_xgboost(x_train, y_train, sw_train)
@@ -227,16 +215,24 @@ def build_candidates(
         except ImportError:
             pass
 
-    try:
-        import lightgbm as lgb
-        if not any(k.startswith("LightGBM") for k in c):
-            c["LightGBM"] = lgb.LGBMClassifier(
-                n_estimators=300, max_depth=8, num_leaves=63,
-                learning_rate=0.1, class_weight="balanced",
-                random_state=42, n_jobs=-1, verbose=-1,
-            )
-    except ImportError:
-        pass
+    if x_train is not None and y_train is not None and not skip_optuna:
+        try:
+            import lightgbm as lgb
+            lgb_params = _optimize_lightgbm(x_train, y_train, sw_train)
+            c["LightGBM"] = lgb.LGBMClassifier(**lgb_params)
+        except ImportError:
+            pass
+    else:
+        try:
+            import lightgbm as lgb
+            if not any(k.startswith("LightGBM") for k in c):
+                c["LightGBM"] = lgb.LGBMClassifier(
+                    n_estimators=300, max_depth=8, num_leaves=63,
+                    learning_rate=0.1, class_weight="balanced",
+                    random_state=42, n_jobs=-1, verbose=-1,
+                )
+        except ImportError:
+            pass
 
     return c
 
@@ -246,6 +242,7 @@ def train_classical(
     test_df: pd.DataFrame,
     *,
     competition: bool = False,
+    skip_optuna: bool = False,
 ) -> tuple[list[EvalMetrics], EvalMetrics, dict[str, Any], TfidfVectorizer, Any]:
     print("\n" + "=" * 60)
     print("  TRACK A — Classical ML Pipeline")
@@ -266,9 +263,10 @@ def train_classical(
     if competition:
         candidates = build_candidates(
             competition=True, x_train=x_train, y_train=y_train, sw_train=sw_train,
+            skip_optuna=skip_optuna,
         )
     else:
-        candidates = build_candidates(competition=False)
+        candidates = build_candidates(competition=False, skip_optuna=skip_optuna)
 
     print(f"\n  Evaluating {len(candidates)} candidates...")
 

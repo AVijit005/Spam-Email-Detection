@@ -231,6 +231,7 @@ def main() -> None:
         print("=" * 60)
         class_metrics, best_metrics, features_config, word_vec, best_estimator = train_classical(
             train_df, test_df, competition=args.competition,
+            skip_optuna=args.skip_optuna,
         )
         all_metrics.extend(class_metrics)
         track_a_metrics = best_metrics
