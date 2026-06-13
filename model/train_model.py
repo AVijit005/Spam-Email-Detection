@@ -40,8 +40,12 @@ except ImportError:
     dist = None
 
 
-def _fs_barrier() -> None:
-    """File-system based barrier for cross-stage sync. Does NOT rely on NCCL."""
+def _fs_barrier(timeout_seconds: int = 300) -> None:
+    """File-system based barrier for cross-stage sync. Does NOT rely on NCCL.
+    
+    Args:
+        timeout_seconds: Maximum time to wait for all ranks. Default 300s (5 min).
+    """
     rank = int(os.environ.get("LOCAL_RANK", 0))
     world_s = int(os.environ.get("WORLD_SIZE", 1))
     if world_s < 2:
@@ -52,10 +56,16 @@ def _fs_barrier() -> None:
     signal_file = _signal_dir / f"barrier_{world_s}r.txt"
     my_file = _signal_dir / f"rank_{rank}_ready.txt"
     my_file.touch()
+    start_time = time.time()
     while True:
         ready = sum(1 for r in range(world_s) if (_signal_dir / f"rank_{r}_ready.txt").exists())
         if ready >= world_s:
             break
+        if time.time() - start_time > timeout_seconds:
+            raise RuntimeError(
+                f"Barrier timeout after {timeout_seconds}s. Rank {rank} waited for {ready}/{world_s} ranks. "
+                f"Signal dir: {_signal_dir}"
+            )
         time.sleep(2)
     if rank == 0:
         for r in range(world_s):
@@ -99,6 +109,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--csv-path", type=str, default=None, help="Path to spam CSV")
     parser.add_argument("--output-dir", type=str, default=None, help="Override artifact output dir")
     parser.add_argument("--skip-optuna", action="store_true", help="Skip hyperparameter optimization")
+    parser.add_argument("--resume", type=str, default=None, help="Resume Track B from checkpoint file path")
     return parser.parse_args()
 
 
@@ -182,8 +193,18 @@ def load_and_preprocess(csv_path: Path, fast_dev: bool = False) -> pd.DataFrame:
     print(f"  Avg length: {df['message'].str.len().mean():.0f} chars")
 
     t0 = time.perf_counter()
-    df["processed"] = df["message"].apply(preprocess_text)
-    print(f"  Preprocessing: {time.perf_counter() - t0:.1f}s")
+    n_jobs = max(1, min(os.cpu_count() or 1, 16))
+    if fast_dev or len(df) < 5000:
+        df["processed"] = df["message"].apply(preprocess_text)
+    else:
+        from joblib import Parallel, delayed
+        batch_size = max(1000, len(df) // n_jobs)
+        batches = [df["message"].iloc[i:i + batch_size] for i in range(0, len(df), batch_size)]
+        results = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(lambda texts: [preprocess_text(t) for t in texts])(b.tolist()) for b in batches
+        )
+        df["processed"] = [item for batch in results for item in batch]
+    print(f"  Preprocessing: {time.perf_counter() - t0:.1f}s ({n_jobs} threads)")
     print(f"  Preprocessed avg len: {df['processed'].str.len().mean():.0f} chars")
 
     df["sample_weight"] = 1.0
@@ -209,6 +230,7 @@ def run_track_b(
     test_df: pd.DataFrame,
     model_name: str,
     fast_dev: bool,
+    resume_from: str | None = None,
 ) -> tuple[EvalMetrics | None, dict[str, Any] | None, Any | None, Any | None]:
     print("\n" + "=" * 60)
     print("  STAGE 3 — Transformer Fine-Tuning (Track B)")
@@ -218,7 +240,7 @@ def run_track_b(
         print(f"  SKIPPED: {model_name} not in supported models: {list(MODEL_IDS)}")
         return None, None, None, None
 
-    config = get_transformer_config(model_name, fast_dev_run=fast_dev)
+    config = get_transformer_config(model_name, fast_dev_run=fast_dev, resume_from=resume_from)
     metrics, package_info, model, tokenizer = train_transformer(
         train_df, test_df, config,
         checkpoint_dir=str(PROJECT_ROOT / "model" / "checkpoints"),
@@ -237,6 +259,11 @@ def main() -> None:
 
     local_rank_env = int(os.environ.get("LOCAL_RANK", -1))
     world_size_env = int(os.environ.get("WORLD_SIZE", 1))
+    gpu_count = torch.cuda.device_count() if torch is not None and torch.cuda.is_available() else 0
+    if gpu_count > 1 and local_rank_env == -1:
+        print(f"  \u26a0 WARNING: {gpu_count} GPUs detected but LOCAL_RANK=-1. "
+              f"Falling back to single-GPU training.\n"
+              f"  Use: torchrun --nproc_per_node={gpu_count} model/train_model.py")
 
     if torch is not None and torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -308,22 +335,33 @@ def main() -> None:
         _fs_barrier()
 
     if not args.track_a_only:
-        tb_metrics, package_info, t_model, t_tokenizer = run_track_b(
-            train_df, test_df, args.model, args.fast_dev,
-        )
-        if is_main and tb_metrics is not None:
-            all_metrics.append(tb_metrics)
-            track_b_metrics = tb_metrics
-            transformer_model = t_model
-            transformer_tokenizer = t_tokenizer
-            transformer_package_info = package_info
+        try:
+            tb_metrics, package_info, t_model, t_tokenizer = run_track_b(
+                train_df, test_df, args.model, args.fast_dev, resume_from=args.resume,
+            )
+            if is_main and tb_metrics is not None:
+                all_metrics.append(tb_metrics)
+                track_b_metrics = tb_metrics
+                transformer_model = t_model
+                transformer_tokenizer = t_tokenizer
+                transformer_package_info = package_info
+        finally:
+            if use_ddp:
+                try:
+                    if _is_ddp_initialized():
+                        dist.destroy_process_group()
+                finally:
+                    _fs_barrier()
+    else:
+        if use_ddp:
+            try:
+                if _is_ddp_initialized():
+                    dist.destroy_process_group()
+            finally:
+                _fs_barrier()
 
-    if use_ddp:
-        if _is_ddp_initialized():
-            dist.destroy_process_group()
-        _fs_barrier()
-        if not is_main:
-            return
+    if not is_main:
+        return
 
     if all_metrics:
         print_leaderboard(all_metrics)
@@ -350,7 +388,8 @@ def main() -> None:
         x_test_ens = sp.hstack([x_test_word, x_test_meta], format="csr")
         y_test_arr = test_df["label"].values
 
-        p_classical = classical_estimator.predict_proba(x_test_ens)
+        p_classical_train = classical_estimator.predict_proba(x_train_ens)
+        p_classical_test = classical_estimator.predict_proba(x_test_ens)
         ensemble = EnsemblePredictor(
             classical_model=classical_estimator,
             classical_vectorizer_bundle={"word_vec": classical_word_vec},
@@ -358,9 +397,10 @@ def main() -> None:
             transformer_tokenizer=transformer_tokenizer,
             fusion_weight=0.50,
         )
-        p_transformer = ensemble.transformer_proba(test_df["message"].tolist())
+        p_transformer_train = ensemble.transformer_proba(train_df["message"].tolist())
+        p_transformer_test = ensemble.transformer_proba(test_df["message"].tolist())
 
-        grid_result = grid_search_fusion_weight(p_classical, p_transformer, y_test_arr)
+        grid_result = grid_search_fusion_weight(p_classical_train, p_transformer_train, train_df["label"].values)
         fusion_weight = grid_result["best_weight"]
 
         ensemble.fusion_weight = fusion_weight
