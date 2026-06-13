@@ -362,12 +362,11 @@ def train_epoch(
             fgm.attack()
             with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu", enabled=scaler is not None):
                 adv_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-                adv_loss = criterion(adv_outputs.logits, labels) / GRADIENT_ACCUMULATION_STEPS
-                combined = loss + ADVERSARIAL_ALPHA * adv_loss
+                adv_loss = ADVERSARIAL_ALPHA * criterion(adv_outputs.logits, labels) / GRADIENT_ACCUMULATION_STEPS
             if scaler is not None:
-                scaler.scale(combined).backward()
+                scaler.scale(adv_loss).backward()
             else:
-                combined.backward()
+                adv_loss.backward()
             fgm.restore()
 
         total_loss += loss.item() * GRADIENT_ACCUMULATION_STEPS
