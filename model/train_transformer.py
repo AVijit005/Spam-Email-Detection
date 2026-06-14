@@ -633,13 +633,19 @@ def train_transformer(
     if config.auto_batch_size and device.type == "cuda":
         searched = _probe_vram_batch_size(model, tokenizer, config.max_length, device, start_batch=batch_size)
         batch_size = searched
+        if config.adversarial_epsilon > 0:
+            batch_size = min(batch_size, 12)
+        if use_ddp:
+            batch_size_tensor = torch.tensor([batch_size], device=device)
+            dist.broadcast(batch_size_tensor, src=0)
+            batch_size = int(batch_size_tensor.item())
         if is_main:
             print(f"  Auto batch size: {config.batch_size} → {batch_size} (VRAM-optimized)")
 
     ddp_model = None
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], output_device=local_rank,
-                    find_unused_parameters=True, broadcast_buffers=False,
+                    find_unused_parameters=False, broadcast_buffers=False,
                     gradient_as_bucket_view=True)
         ddp_model = model
 
@@ -884,7 +890,7 @@ def train_transformer(
         sub_sampler = DistributedSampler(sub_dataset, num_replicas=world_size, rank=local_rank,
                                           shuffle=True, drop_last=True) if use_ddp else None
         sub_loader = DataLoader(
-            sub_dataset, batch_size=config.batch_size,
+            sub_dataset, batch_size=batch_size,
             sampler=sub_sampler, shuffle=(sub_sampler is None),
             num_workers=4, pin_memory=(device.type == "cuda"),
             persistent_workers=True, prefetch_factor=4, drop_last=True,

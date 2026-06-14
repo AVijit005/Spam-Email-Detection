@@ -353,11 +353,15 @@ def main() -> None:
             fusion_weight = grid_result["best_weight"]
 
             ensemble.fusion_weight = fusion_weight
-            ensemble_preds = ensemble.predict(x_test_ens, test_df["message"].tolist())
+            p_spam_test = (
+                fusion_weight * p_classical_test[:, 1]
+                + (1 - fusion_weight) * p_transformer_test[:, 1]
+            )
+            ensemble_preds = (p_spam_test >= 0.55).astype(np.int32)
             from sklearn.metrics import f1_score, classification_report, confusion_matrix, roc_auc_score
             ensemble_spam_f1 = f1_score(y_test_arr, ensemble_preds, pos_label=1)
+            ensemble_proba = np.column_stack([1 - p_spam_test, p_spam_test])
             try:
-                ensemble_proba = ensemble.predict_proba(x_test_ens, test_df["message"].tolist())
                 ensemble_roc = float(roc_auc_score(y_test_arr, ensemble_proba[:, 1]))
             except ValueError:
                 ensemble_roc = None
