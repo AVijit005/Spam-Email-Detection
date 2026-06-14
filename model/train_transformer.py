@@ -633,8 +633,6 @@ def train_transformer(
     if config.auto_batch_size and device.type == "cuda":
         searched = _probe_vram_batch_size(model, tokenizer, config.max_length, device, start_batch=batch_size)
         batch_size = searched
-        if config.adversarial_epsilon > 0:
-            batch_size = min(batch_size, 12)
         if use_ddp:
             batch_size_tensor = torch.tensor([batch_size], device=device)
             dist.broadcast(batch_size_tensor, src=0)
