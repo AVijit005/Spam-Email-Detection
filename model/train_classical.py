@@ -312,7 +312,7 @@ def train_classical(
             best_metrics.spam_f1, best_metrics.spam_recall, best_metrics.accuracy,
         ):
             best_metrics = met
-            best_estimator = clone(estimator)
+            best_estimator = estimator
 
     if best_metrics is None or best_estimator is None:
         raise SystemExit("Track A: no candidates evaluated.")

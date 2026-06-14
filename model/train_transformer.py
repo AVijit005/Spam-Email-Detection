@@ -662,6 +662,8 @@ def train_transformer(
         test_cache = token_cache_dir / "test_tokenized.pt"
         train_safe = train_cache.with_suffix(".safetensors")
         test_safe = test_cache.with_suffix(".safetensors")
+        if use_ddp:
+            dist.barrier()
         if is_main:
             token_cache_dir.mkdir(parents=True, exist_ok=True)
             if train_safe.exists() and test_safe.exists():
@@ -804,6 +806,8 @@ def train_transformer(
     if resume_path:
         if not resume_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {resume_path}")
+        if use_ddp:
+            dist.barrier()
         if is_main:
             print(f"  Resuming from checkpoint: {resume_path}")
             resume_data = torch.load(resume_path, map_location="cpu", weights_only=False)
@@ -859,6 +863,11 @@ def train_transformer(
                 print(f"  [EMERGENCY SAVE] Complete. Resume available.")
             except Exception as e:
                 print(f"  [EMERGENCY SAVE] FAILED: {e}")
+        try:
+            if use_ddp and dist.is_initialized():
+                dist.destroy_process_group()
+        except Exception:
+            pass
         os._exit(1)
 
     _prev_sigterm = signal.signal(signal.SIGTERM, _emergency_save)
@@ -894,7 +903,7 @@ def train_transformer(
         else:
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
-            train_dataset.set_difficulty(np.zeros(len(train_texts)))
+            train_dataset.set_difficulty(None)
             active_loader = train_loader
 
         max_oom_retries = 1 if not use_ddp else 0
@@ -929,6 +938,9 @@ def train_transformer(
                     train_sampler.set_epoch(epoch)
                 if is_main:
                     print(f"  Retrying epoch {epoch} with batch_size={batch_size}")
+
+        if use_ddp:
+            dist.barrier()
 
         if is_main:
             probs, labels = evaluate_model(model, test_loader, device)
