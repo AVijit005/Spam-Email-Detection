@@ -145,7 +145,7 @@ def _get_ddp_config() -> tuple[bool, int, int]:
                 f"  Use torchrun to launch (sets these automatically):\n"
                 f"    torchrun --nproc_per_node={world_size} model/train_model.py"
             )
-        dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
+        dist.init_process_group(backend="nccl", timeout=timedelta(hours=12))
     dummy = torch.zeros(1, device=f"cuda:{local_rank}")
     dist.all_reduce(dummy)
     return True, local_rank, world_size
@@ -788,7 +788,7 @@ def train_transformer(
     resume_path = None
     if config.resume_from:
         resume_path = Path(config.resume_from)
-    elif checkpoint_dir and is_main:
+    elif checkpoint_dir:
         ckpt_dir = Path(checkpoint_dir)
         candidates = sorted(
             list(ckpt_dir.glob(f"{config.model_name}_checkpoint*.pt")) +
@@ -797,10 +797,9 @@ def train_transformer(
         )
         if candidates:
             resume_path = candidates[-1]
-            if resume_path.name.endswith("_emergency.pt"):
-                print(f"  Auto-resume from emergency checkpoint: {resume_path}")
-            else:
-                print(f"  Auto-resume from latest checkpoint: {resume_path}")
+            if is_main:
+                label = "emergency checkpoint" if resume_path.name.endswith("_emergency.pt") else "latest checkpoint"
+                print(f"  Auto-resume from {label}: {resume_path}")
 
     if resume_path:
         if not resume_path.exists():
@@ -898,7 +897,7 @@ def train_transformer(
             train_dataset.set_difficulty(np.zeros(len(train_texts)))
             active_loader = train_loader
 
-        max_oom_retries = 1
+        max_oom_retries = 1 if not use_ddp else 0
         for retry in range(max_oom_retries + 1):
             try:
                 avg_loss = train_epoch(model, active_loader, optimizer, scheduler, criterion, device,
