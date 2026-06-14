@@ -223,9 +223,7 @@ def _probe_vram_batch_size(
 
 def _detect_environment() -> str:
     if os.getenv("KAGGLE_KERNEL_RUN_TYPE") or os.path.isdir("/kaggle"):
-        if os.getenv("KAGGLE_KERNEL_RUN_TYPE") == "Interactive":
-            return "online"
-        return "kaggle"
+        return "online"
     if os.getenv("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"):
         return "cached"
     if os.getenv("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes"):
