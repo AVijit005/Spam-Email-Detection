@@ -1,5 +1,0 @@
-Collecting safetensors
-  Using cached safetensors-0.8.0-cp310-abi3-win_amd64.whl.metadata (4.2 kB)
-Using cached safetensors-0.8.0-cp310-abi3-win_amd64.whl (355 kB)
-Installing collected packages: safetensors
-Successfully installed safetensors-0.8.0
