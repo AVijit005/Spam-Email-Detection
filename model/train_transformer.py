@@ -54,7 +54,7 @@ from model.shared import EvalMetrics, ram_report
 
 BATCH_SIZE = 16
 GRADIENT_ACCUMULATION_STEPS = 4  # effective batch = 64
-EPOCHS = 3
+EPOCHS = 2
 MAX_LENGTH = 512
 LEARNING_RATE = 2e-5
 WARMUP_RATIO = 0.1
@@ -633,6 +633,8 @@ def train_transformer(
     if config.auto_batch_size and device.type == "cuda":
         searched = _probe_vram_batch_size(model, tokenizer, config.max_length, device, start_batch=batch_size)
         batch_size = searched
+        if config.adversarial_epsilon > 0:
+            batch_size = min(batch_size, 12)
         if use_ddp:
             batch_size_tensor = torch.tensor([batch_size], device=device)
             dist.broadcast(batch_size_tensor, src=0)
