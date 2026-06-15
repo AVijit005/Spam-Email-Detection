@@ -21,7 +21,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 Verify:
 ```bash
 curl http://127.0.0.1:8000/v1/health
-# {"status":"ok","model_loaded":true,"model_version":"LogisticRegression-...",...}
+# {"status":"ok","model_loaded":true,"model_version":"Ensemble-XGBoost-DeBERTa-v3",...}
 ```
 
 ## Docker Deployment

@@ -9,6 +9,8 @@ The Spam Email Detection project has **225 passing tests** across 22 test files,
 - **205 new tests** in the `tests/` directory: 14 unit test files + 6 integration test files
 - **20 legacy tests** in `backend/tests/`: API, feedback store, runtime config, spam detector core, training
 
+The test suite covers the full ensemble prediction path including XGBoost + DeBERTa-v3 routing, ensemble fallback behavior, and fusion weight integration.
+
 ## Running Tests
 
 ### All Tests
@@ -128,7 +130,7 @@ Keyword hits (2): Match counting, case insensitivity.
 
 Indicator signals (6): URL signal, money signal, phone signal, aggressive punctuation, urgency signal, benign text → no signals.
 
-Meta feature map (1): Dict with all 16 keys.
+Meta feature map (1): Dict with all 32 keys.
 
 ### `app/core/explain.py` — 8 tests ✅ Full
 
