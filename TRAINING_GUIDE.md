@@ -62,7 +62,7 @@ python model/train_model.py --output-dir /kaggle/working/models
 | Stage | Hardware | Time |
 |---|---|---|
 | Stage 1 — Load | CPU | ~45s |
-| Stage 2 — Classical | 8-core CPU | ~35 min (4 candidates with Optuna) |
+| Stage 2 — Classical | 8-core CPU | ~5 min (3 candidates, default params) or ~35 min with Optuna |
 | Stage 3 — Transformer | T4 GPU | ~60-90 min (DeBERTa-v3, 3 epochs) |
 | Stage 4 — Ensemble | CPU | ~3 min |
 | Stage 5 — Retrain | CPU | ~10 min |

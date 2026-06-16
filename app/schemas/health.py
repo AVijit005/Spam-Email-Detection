@@ -7,6 +7,7 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     vectorizer_loaded: bool
+    ensemble_active: bool = False
     feedback_backend: str
     user_whitelist_count: int
     trusted_domain_catalog_count: int

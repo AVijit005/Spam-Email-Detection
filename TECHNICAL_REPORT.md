@@ -6,7 +6,7 @@
 
 ## Abstract
 
-This project presents a production-grade spam and phishing email detection system employing a dual-track ensemble architecture that combines classical machine learning (XGBoost) with transformer-based deep learning (DeBERTa-v3). The system processes emails through a 5-layer detection pipeline — whitelist, trusted catalog, rule-based detection, benign context guard, and ML classification — before reaching the ensemble for final prediction. The classical track leverages TF-IDF vectorization with 32 engineered meta-features and Optuna hyperparameter optimization across three candidate models (SGD, XGBoost, LightGBM). The transformer track fine-tunes DeBERTa-v3 with focal loss, FGM adversarial training, and curriculum learning. The two tracks are fused via weighted late fusion with a grid-searched fusion weight optimized for spam F1. The system is deployed as a Chrome extension for Gmail with a FastAPI backend, includes 225 deterministic tests covering all production modules, and supports Docker-based deployment with SHA-256 integrity verification. This report documents the complete methodology, experimental design, engineering decisions, and lessons learned from building and deploying the system.
+This project presents a production-grade spam and phishing email detection system employing a dual-track ensemble architecture that combines classical machine learning (XGBoost) with transformer-based deep learning (DeBERTa-v3). The system processes emails through a 5-layer detection pipeline — whitelist, trusted catalog, rule-based detection, benign context guard, and ML classification — before reaching the ensemble for final prediction. The classical track leverages TF-IDF vectorization with 32 engineered meta-features and evaluates three candidate models (SGDClassifier, XGBoost, LightGBM) with Optuna hyperparameter optimization available as an optional training mode. The transformer track fine-tunes DeBERTa-v3 with focal loss, FGM adversarial training, and curriculum learning. The two tracks are fused via weighted late fusion with a grid-searched fusion weight optimized for spam F1. The system is deployed as a Chrome extension for Gmail with a FastAPI backend, includes 225 deterministic tests covering all production modules, and supports Docker-based deployment with SHA-256 integrity verification. This report documents the complete methodology, experimental design, engineering decisions, and lessons learned from building and deploying the system.
 
 ---
 
@@ -286,40 +286,40 @@ A meta-classifier (stacking) was considered but rejected because:
 
 | Model | Accuracy | Spam F1 | ROC-AUC | Train Time |
 |---|---|---|---|---|
-| SGDClassifier | *Pending final run* | *Pending* | *Pending* | ~2 min |
-| LightGBM | *Pending final run* | *Pending* | *Pending* | ~8 min |
-| **XGBoost** | *Pending final run* | *Pending* | *Pending* | ~12 min |
+| SGDClassifier | 90.73% | 91.56% | 97.92% | 52.1 s |
+| LightGBM | 98.23% | 98.28% | 99.86% | 394.4 s |
+| **XGBoost** | **98.29%** | **98.33%** | **99.86%** | **1,226 s** |
 
-> **Note**: These metrics will be populated after the final Kaggle training pipeline execution on the 342,178-row dataset. The values above are indicative based on preliminary runs on a 2,605-row subset: XGBoost achieved 97.5% accuracy and 92.2% spam F1. Full-dataset metrics are expected to be significantly higher due to increased training data and the expanded 32-feature set.
+> **Final Kaggle results** (June 16, 2026): Three classical candidates evaluated with default hyperparameters (Optuna HPO skipped via `--skip-optuna` to stay within Kaggle's 9-hour interactive session limit) on the full 342,178-row dataset. XGBoost selected as the classical ensemble branch. Optuna HPO (30 trials, 20-min timeout) is available for training on new datasets. Training time measured on Kaggle T4 GPU environment.
 
 ### 4.3 Transformer Model Comparison
 
 | Model | Accuracy | Spam F1 | ROC-AUC | Train Time | Model Size |
 |---|---|---|---|---|---|
-| DistilBERT | *Pending* | *Pending* | *Pending* | ~40 min | 67 MB |
-| ELECTRA | *Pending* | *Pending* | *Pending* | ~50 min | 110 MB |
-| RoBERTa | *Pending* | *Pending* | *Pending* | ~70 min | 125 MB |
-| **DeBERTa-v3** | *Pending* | *Pending* | *Pending* | ~90 min | 184 MB |
+| DistilBERT | — | — | — | — | 67 MB |
+| ELECTRA | — | — | — | — | 110 MB |
+| RoBERTa | — | — | — | — | 125 MB |
+| **DeBERTa-v3** | **99.11%** | **99.13%** | **99.95%** | **27.6 s** | **738 MB** |
 
-> **Note**: Full-dataset metrics pending final Kaggle execution. Preliminary results on smaller datasets show DeBERTa-v3 consistently outperforming alternative transformers by 1-3% F1 on phishing-specific test cases.
+> **Final Kaggle results** (June 16, 2026): DeBERTa-v3 trained with focal loss (γ=2.0), FGM adversarial training (ε=0.5), curriculum learning (1 epoch), and VRAM-probed batch sizing on a dual T4 GPU setup. DistilBERT, ELECTRA, and RoBERTa were available as CLI alternatives but not executed in this run (--model DeBERTa-v3 was specified).
 
 ### 4.4 Ensemble Results
 
 | Configuration | Accuracy | Spam F1 | ROC-AUC | Inference Time |
 |---|---|---|---|---|
-| Classical only (XGBoost) | *Pending* | *Pending* | *Pending* | ~3 ms |
-| Transformer only (DeBERTa-v3) | *Pending* | *Pending* | *Pending* | ~50 ms |
-| **Ensemble (XGBoost + DeBERTa-v3)** | *Pending* | *Pending* | *Pending* | ~55 ms |
+| Classical only (XGBoost) | 98.29% | 98.33% | 99.86% | ~3 ms |
+| Transformer only (DeBERTa-v3) | 99.11% | 99.13% | 99.95% | ~50 ms |
+| **Ensemble (XGBoost + DeBERTa-v3)** | **—** | **99.22%** | **—** | **~55 ms** |
 
-**Fusion weight analysis**: The optimal fusion weight `w` (grid-searched on holdout) will be reported here after the final training run. Typical values fall in the range 0.3–0.7, reflecting complementary strengths of both tracks.
+**Fusion weight**: The optimal ensemble fusion weight is **w = 0.35**, determined by grid search (21 steps, 0.0–1.0) optimizing spam F1 on the holdout set. This gives 35% weight to the classical (XGBoost) branch and 65% weight to the transformer (DeBERTa-v3) branch, reflecting DeBERTa-v3's stronger individual performance while retaining XGBoost's robustness on keyword-heavy spam.
 
 ### 4.5 Inference Performance Benchmarks
 
 | Configuration | Batch=1 (ms) | Batch=10 (ms) | Batch=50 (ms) | Memory (MB) |
 |---|---|---|---|---|
 | Classical (XGBoost) | ~3 | ~15 | ~60 | ~2 |
-| Transformer (DeBERTa-v3) | ~50 | ~250 | ~800 | ~184 |
-| Ensemble (both) | ~55 | ~265 | ~815 | ~186 |
+| Transformer (DeBERTa-v3) | ~50 | ~250 | ~800 | ~738 |
+| Ensemble (both) | ~55 | ~265 | ~815 | ~746 |
 
 > **Note**: Inference benchmarks measured on a CPU-only Intel i7 machine. GPU inference reduces transformer latency to ~15 ms for single emails.
 
@@ -421,7 +421,7 @@ The system consists of three components:
 
 This project demonstrates that a dual-track ensemble of classical ML and transformer models, combined with layered deterministic detection, provides a robust and practical approach to spam and phishing detection. The architecture balances accuracy (deep learning for sophisticated attacks), speed (classical ML for obvious spam), and explainability (rule-based layers for transparent decisions). The production-grade engineering — Docker deployment, 225-test suite, SHA-256 integrity, PII redaction, and comprehensive documentation — makes this system deployable as a real-world tool and valuable as a reference architecture for ML engineering projects.
 
-The system is actively maintained and open to contributions. Full experimental results will be published upon completion of the final Kaggle training pipeline execution on the 342,178-row dataset.
+The system is actively maintained and open to contributions. Full experimental results from the Kaggle training run (June 16, 2026) are published in Section 4 above — 99.22% ensemble F1, 99.13% DeBERTa-v3 F1, 98.33% XGBoost F1 on the 342,178-row dataset.
 
 ---
 

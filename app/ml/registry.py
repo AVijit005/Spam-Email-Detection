@@ -77,3 +77,59 @@ def load_model(
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = json.load(f)
     return ModelArtifact(model=model, vectorizer=vectorizer, metadata=metadata)
+
+
+def load_transformer(
+    model_path: Path,
+    tokenizer_path: Path,
+    model_name: str,
+    device: str = "cpu",
+    cache_dir: str | None = None,
+) -> tuple[Any, Any] | None:
+    if not (model_path.exists() and tokenizer_path.is_dir()):
+        return None
+
+    sha_path = _hash_path(model_path)
+    if sha_path.exists():
+        _verify_hash(model_path, sha_path.read_text().strip())
+
+    try:
+        import torch  # noqa: F811
+        from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
+    except ImportError:
+        import logging
+        logging.getLogger(__name__).warning(
+            "transformers/torch not installed — running XGBoost-only."
+        )
+        return None
+
+    try:
+        hf_config = AutoConfig.from_pretrained(
+            model_name, num_labels=2,
+            cache_dir=cache_dir,
+        )
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, config=hf_config,
+            cache_dir=cache_dir,
+        )
+    except (OSError, EnvironmentError):
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not download %s (network unavailable, model not cached). "
+            "Running XGBoost-only. Pre-download with: "
+            "python -c \"from transformers import AutoModel; AutoModel.from_pretrained('%s')\"",
+            model_name, model_name,
+        )
+        return None
+
+    state_dict = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(state_dict)
+    model.to(device)
+    model.eval()
+
+    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path))
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    return model, tokenizer

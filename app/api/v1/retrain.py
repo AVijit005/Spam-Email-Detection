@@ -37,15 +37,20 @@ def retrain_model() -> RetrainResponse:
             raise HTTPException(status_code=500, detail=detail)
         from app.main import load_resources
         load_resources()
-        training_info = model_metadata.get("feedback_training", {})
-        selected_metrics = model_metadata.get("selected_metrics", {})
+        import app.api.v1.health as health_mod
+        metadata = health_mod.model_metadata if health_mod.model_metadata else model_metadata
+        training_info = metadata.get("feedback_training", {})
+        selected_metrics = metadata.get("selected_metrics", {})
         spam_f1 = selected_metrics.get("spam_f1")
+        model_version = str(metadata.get("model_name", "unknown"))
+        trained_at = metadata.get("trained_at_utc")
+        dataset_rows = int(metadata.get("dataset_rows", 0))
         return RetrainResponse(
             status="ok",
-            model_version=str(model_metadata.get("model_name", "unknown")),
+            model_version=model_version,
             feedback_backend=feedback_backend_name(settings.feedback_log_path),
-            trained_at_utc=model_metadata.get("trained_at_utc"),
-            dataset_rows=int(model_metadata.get("dataset_rows", 0)),
+            trained_at_utc=trained_at,
+            dataset_rows=dataset_rows,
             feedback_rows_used=training_info.get("feedback_rows_used", 0),
             feedback_last_consumed_utc=training_info.get("last_feedback_at_utc"),
             spam_f1=float(spam_f1) if spam_f1 else None,

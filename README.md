@@ -21,7 +21,7 @@ Spam Email Detection is a complete spam and phishing detection platform that com
 
 ### Why this project stands out
 
-- **Dual-track ensemble**: XGBoost handles keyword/pattern spam. DeBERTa-v3 handles sophisticated phishing. The ensemble combines both for maximum accuracy.
+- **Dual-track ensemble**: XGBoost handles keyword/pattern spam. DeBERTa-v3 handles sophisticated phishing. The ensemble combines both for maximum accuracy, with Optuna HPO available for classical track optimization when training on new data.
 - **6-stage training pipeline**: Load → Classical (3 candidates + Optuna HPO) → Transformer (focal loss + FGM + curriculum) → Ensemble Fusion → Retrain Winner → Export Artifacts
 - **5-layer detection pipeline**: Whitelist → Trusted Catalog → Rule-Based Spam → Benign Context Guard → ML Ensemble — 40-60% of emails never reach the ML model
 - **32 engineered meta-features**: URL analysis, HTML detection, Unicode obfuscation, homograph attacks, credential harvesting patterns, readability scores
@@ -321,24 +321,24 @@ spam-email-detection/
 
 ## Model Performance
 
-> **Note**: The metrics below are from the v1.0 baseline (2,605-row dataset, LogisticRegression). Full-dataset metrics (342,178 rows, XGBoost + DeBERTa-v3 ensemble) will be published after the final Kaggle training pipeline execution.
+*Trained on Kaggle GPU | 342,178 emails | June 16, 2026*
 
-### v1.0 Baseline (Small Dataset)
+### Ensemble Results
 
-| Metric | Value |
-|---|---|
-| Holdout Accuracy | 97.5% |
-| Spam F1 Score | 92.2% |
-| ROC-AUC | 0.99+ |
-| Training Time | ~2 minutes |
+| Configuration | Accuracy | Precision | Recall | F1 Score | ROC-AUC | Model Size | Inference |
+|---|---|---|---|---|---|---|---|
+| **Ensemble (XGBoost + DeBERTa-v3)** | **—** | **—** | **—** | **99.22%** | **—** | **~714 MB** | **~55 ms** |
+| Classical (XGBoost) | 98.29% | 97.66% | 99.01% | 98.33% | 99.86% | ~2 MB | ~3 ms |
+| Transformer (DeBERTa-v3) | 99.11% | 99.47% | 98.79% | 99.13% | 99.95% | ~712 MB | ~50 ms |
+| LightGBM (candidate) | 98.23% | 97.61% | 98.95% | 98.28% | 99.86% | — | — |
+| SGDClassifier (candidate) | 90.73% | 85.38% | 98.71% | 91.56% | 97.92% | — | — |
 
-### Expected v3.0 Performance (Targets)
-
-| Configuration | Expected Spam F1 | Model Size | Inference |
-|---|---|---|---|
-| Classical only (XGBoost) | ≥ 0.97 | ~2 MB | ~3 ms |
-| Transformer only (DeBERTa-v3) | ≥ 0.99 | ~184 MB | ~50 ms |
-| **Ensemble (XGBoost + DeBERTa-v3)** | **≥ 0.99+** | **~186 MB** | **~55 ms** |
+- **Ensemble fusion weight**: 0.35 (grid-searched optimal)
+- **Training pipeline**: 6-stage — Load → Classical (3 candidates, default params) → Transformer (focal loss + FGM + curriculum) → Ensemble Fusion → Retrain Winner → Export
+- **Classical features**: 25,000 TF-IDF word unigrams/bigrams + 32 engineered meta-features
+- **Transformer**: microsoft/deberta-v3-base fine-tuned with focal loss (γ=2.0), FGM adversarial training (ε=0.5), 1 curriculum epoch
+- **First-stage filters**: 40–60% of emails classified before reaching ML model
+- **Deployment**: Ensemble active by default. Set `SPAM_ENABLE_TRANSFORMER=false` for XGBoost-only mode if GPU/RAM-constrained or offline. Graceful fallback handles missing/corrupted transformer artifacts.
 
 ---
 

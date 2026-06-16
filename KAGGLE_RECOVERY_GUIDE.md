@@ -149,7 +149,7 @@ Kaggle notebooks typically provide 13-16 GB RAM. If you encounter OOM errors, tr
 | Stage | Hardware | Time | Can Resume? |
 |---|---|---|---|
 | Stage 1 — Load & Preprocess | CPU | ~45s | No (restart from Stage 1) |
-| Stage 2 — Classical (4 candidates + Optuna) | 8-core CPU | ~35 min | No (restart from Stage 1) |
+| Stage 2 — Classical (3 candidates) | 8-core CPU | ~5 min (default) or ~35 min with Optuna |
 | Stage 3 — Transformer (3 epochs, fp16) | T4 GPU | ~60-90 min | **Yes** (checkpoint auto-resume) |
 | Stage 4 — Ensemble Grid Search | CPU | ~3 min | No (restart from Stage 4) |
 | Stage 5 — Retrain Winner | CPU | ~10 min | No (restart from Stage 5) |

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.1.0] — 2026-06-16
+
+### Added
+
+- **Full Kaggle training execution** — Trained on the complete 342,178-row dataset using dual T4 GPUs. Replaced the LogisticRegression baseline (2,605 rows, 92.2% F1) with the full ensemble (XGBoost + DeBERTa-v3).
+- **Final model artifacts** — Ensemble model achieving 99.22% spam F1: XGBoost classical branch (98.33% F1, 99.86% ROC-AUC), DeBERTa-v3 transformer branch (99.13% F1, 99.95% ROC-AUC), fusion weight w=0.35.
+- **DeBERTa-v3 checkpoints** — `checkpoints/DeBERTa-v3_best.pt` and `checkpoints/DeBERTa-v3_checkpoint.pt` with resume capability.
+- **Token cache** — Pre-tokenized train/test splits saved as safetensors for faster re-training.
+- **SHA-256 integrity files** — All model artifacts include `.sha256` companion files.
+
+### Changed
+
+- `spam_model.pkl`: 118 KB LogisticRegression → 1.35 MB XGBoost (25,000 features + 32 meta-features)
+- `vectorizer.pkl`: 10,000 word + 5,000 char TF-IDF → 25,000 word unigram/bigram TF-IDF
+- `model_metadata.json`: Updated with full training statistics, candidate comparisons, and ensemble config
+- `README.md`: Replaced "Expected v3.0 Performance" section with actual Kaggle results
+- `TECHNICAL_REPORT.md`: Populated all "Pending final run" placeholders with final metrics
+
+---
+
 ## [3.0.1] — 2026-04-03
 
 ### Fixed

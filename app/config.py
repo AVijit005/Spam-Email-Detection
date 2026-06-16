@@ -49,5 +49,13 @@ class Settings(BaseSettings):
 
     api_key: str = ""
 
+    # --- Ensemble / Transformer Configuration ---
+    enable_transformer: bool = True
+    transformer_model_path: Path = MODEL_DIR / "transformer_model.pt"
+    transformer_tokenizer_path: Path = MODEL_DIR / "transformer_tokenizer"
+    transformer_model_name: str = "microsoft/deberta-v3-base"
+    transformer_cache_dir: Path | None = None
+    transformer_device: str = "cpu"
+
 
 settings = Settings()

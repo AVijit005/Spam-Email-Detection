@@ -41,8 +41,22 @@ env/
 .DS_Store
 Thumbs.db
 
-# Model files (too large for git)
-*.pkl
+# Model artifacts — exclude large files that can be regenerated
+model/checkpoints/
+model/transformer_model.pt
+model/*.sha256
+
+# Legacy / refactored code
+backend/
+app/storage/*.legacy
+
+# Audit / diagnostic scripts
+__*.py
+__*.ps1
+__*.txt
+
+# Command code plans
+.commandcode/plans/
 
 # Logs
 *.log
