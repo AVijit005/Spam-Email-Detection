@@ -14,6 +14,8 @@ dist/
 *.sha256
 data/feedback.jsonl
 model/checkpoints/
+model/transformer_model.pt
+model/transformer_tokenizer/
 node_modules
 .vscode
 .idea

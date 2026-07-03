@@ -54,11 +54,8 @@ def load_resources() -> None:
             )
 
             result = load_transformer(
-                model_path=settings.transformer_model_path,
-                tokenizer_path=settings.transformer_tokenizer_path,
-                model_name=transformer_model_name,
+                model_dir=settings.transformer_model_dir,
                 device=settings.transformer_device,
-                cache_dir=str(settings.transformer_cache_dir) if settings.transformer_cache_dir else None,
             )
 
             if result is not None:

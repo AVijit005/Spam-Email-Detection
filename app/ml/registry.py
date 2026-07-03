@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import pickle
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -80,22 +82,33 @@ def load_model(
 
 
 def load_transformer(
-    model_path: Path,
-    tokenizer_path: Path,
-    model_name: str,
+    model_dir: Path,
     device: str = "cpu",
-    cache_dir: str | None = None,
 ) -> tuple[Any, Any] | None:
-    if not (model_path.exists() and tokenizer_path.is_dir()):
+    """Load transformer model and tokenizer from a Hugging Face model directory.
+
+    Expects ``model_dir`` to contain:
+      - config.json
+      - model.safetensors (preferred) or pytorch_model.bin
+      - tokenizer.json
+      - tokenizer_config.json
+
+    Falls back gracefully if ``transformers`` / ``torch`` are not installed
+    or if the directory is missing required files.
+    """
+    safetensors_path = model_dir / "model.safetensors"
+    _ensure_hf_model_available(model_dir)
+
+    if not model_dir.is_dir() or not (model_dir / "config.json").exists():
         return None
 
-    sha_path = _hash_path(model_path)
+    sha_path = _hash_path(safetensors_path)
     if sha_path.exists():
-        _verify_hash(model_path, sha_path.read_text().strip())
+        _verify_hash(safetensors_path, sha_path.read_text().strip())
 
     try:
         import torch  # noqa: F811
-        from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
     except ImportError:
         import logging
         logging.getLogger(__name__).warning(
@@ -104,32 +117,73 @@ def load_transformer(
         return None
 
     try:
-        hf_config = AutoConfig.from_pretrained(
-            model_name, num_labels=2,
-            cache_dir=cache_dir,
-        )
         model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, config=hf_config,
-            cache_dir=cache_dir,
+            str(model_dir), local_files_only=True,
         )
-    except (OSError, EnvironmentError):
+    except (OSError, EnvironmentError, FileNotFoundError) as exc:
         import logging
         logging.getLogger(__name__).warning(
-            "Could not download %s (network unavailable, model not cached). "
-            "Running XGBoost-only. Pre-download with: "
-            "python -c \"from transformers import AutoModel; AutoModel.from_pretrained('%s')\"",
-            model_name, model_name,
+            "Could not load transformer from %s: %s — running XGBoost-only.",
+            model_dir, exc,
         )
         return None
 
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
-
-    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path))
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(model_dir), local_files_only=True,
+        )
+    except (OSError, EnvironmentError, FileNotFoundError) as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not load tokenizer from %s: %s — running XGBoost-only.",
+            model_dir, exc,
+        )
+        return None
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    model.to(device)
+    model.eval()
+
     return model, tokenizer
+
+
+def _ensure_hf_model_available(model_dir: Path) -> None:
+    """Download the HF model from HuggingFace Hub if the local directory is empty.
+
+    HF Spaces clones the repo which excludes large model files via .gitignore.
+    This downloads them on first startup.
+    """
+    if (model_dir / "config.json").exists():
+        return
+
+    repo_id = os.environ.get("HF_MODEL_REPO_ID", "pavitra55/spam-email-deberta-v3")
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        import logging
+        logging.getLogger(__name__).warning(
+            "huggingface_hub not installed — cannot download model from HF Hub."
+        )
+        return
+
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Model files not found locally. Downloading %s from HuggingFace Hub...", repo_id)
+    try:
+        model_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(model_dir),
+            local_dir_use_symlinks=False,
+        )
+        logger.info("Download complete. Model cached at %s", model_dir)
+    except Exception as exc:
+        logger.warning(
+            "Failed to download model from HF Hub: %s. Running XGBoost-only.", exc
+        )
+        if model_dir.exists():
+            for f in model_dir.iterdir():
+                f.unlink(missing_ok=True)

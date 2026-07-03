@@ -446,27 +446,50 @@ def main() -> None:
 
             save_artifacts(classical_estimator, vectorizer_bundle, metadata, model_path, vec_path, meta_path)
 
-            xf_model_path = output_dir / "transformer_model.pt"
-            xf_tokenizer_path = output_dir / "transformer_tokenizer"
-            _torch.save(transformer_model.state_dict(), xf_model_path)
-            transformer_tokenizer.save_pretrained(str(xf_tokenizer_path))
-            (xf_model_path.parent / (xf_model_path.name + ".sha256")).write_text(
-                __import__("hashlib").sha256(xf_model_path.read_bytes()).hexdigest()
+            # Export transformer as HF-native directory
+            hf_dir = output_dir / "hf_model"
+            hf_dir.mkdir(parents=True, exist_ok=True)
+
+            # Load base config with correct num_labels and save
+            from transformers import AutoConfig
+            hf_config = AutoConfig.from_pretrained(
+                transformer_package_info.get("model_id", args.model), num_labels=2,
+                cache_dir=str(_resolve_cache_dir()) if "cached" in os.getenv("TRANSFORMERS_OFFLINE", "") else None,
             )
-            print(f"  Transformer saved: {xf_model_path}")
-            print(f"  Tokenizer saved:   {xf_tokenizer_path}")
+            hf_config.id2label = {0: "HAM", 1: "SPAM"}
+            hf_config.label2id = {"HAM": 0, "SPAM": 1}
+
+            # Save model (architecture + weights together)
+            transformer_model.eval().to("cpu")
+            transformer_model.save_pretrained(str(hf_dir), safe_serialization=True)
+
+            # Save tokenizer from existing tokenizer directory
+            from transformers import AutoTokenizer
+            saved_tokenizer = AutoTokenizer.from_pretrained(str(output_dir / "transformer_tokenizer"))
+            saved_tokenizer.model_max_length = 512
+            saved_tokenizer.save_pretrained(str(hf_dir))
+
+            # SHA-256 for safetensors
+            safetensors_path = hf_dir / "model.safetensors"
+            (safetensors_path.parent / (safetensors_path.name + ".sha256")).write_text(
+                __import__("hashlib").sha256(safetensors_path.read_bytes()).hexdigest()
+            )
+
+            print(f"  Transformer saved: {hf_dir}")
+            print(f"    model.safetensors, config.json, tokenizer files")
 
         elif track_b_metrics is not None:
             import torch as _torch
-            vectorizer_bundle: dict[str, Any] = {"word_vec": full_word_vec, "version": "3.0.0"}
-            model_path = output_dir / "transformer_model.pt"
-            vec_path = output_dir / "transformer_tokenizer"
-            with open(vec_path / "config.json", "w") as f:
-                json.dump({"model_name": args.model, "max_length": 512}, f)
-            _torch.save(transformer_model.state_dict(), model_path)
+            hf_dir = output_dir / "hf_model"
+            hf_dir.mkdir(parents=True, exist_ok=True)
+            transformer_model.eval().to("cpu")
+            transformer_model.save_pretrained(str(hf_dir), safe_serialization=True)
+            transformer_tokenizer.save_pretrained(str(hf_dir))
             meta_path = output_dir / "model_metadata.json"
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
+            model_path = hf_dir
+            vec_path = hf_dir
         else:
             vectorizer_bundle: dict[str, Any] = {
                 "word_vec": full_word_vec,

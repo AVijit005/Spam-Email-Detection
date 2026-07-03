@@ -1,3 +1,13 @@
+---
+title: Spam Email Detection
+emoji: 🛡️
+colorFrom: red
+colorTo: blue
+sdk: docker
+pinned: true
+app_port: 8000
+---
+
 # 🛡️ Spam Email Detection — Dual-Track ML for Gmail Protection
 
 **A production-grade spam and phishing detection system with a Chrome extension, FastAPI backend, dual-track ensemble (XGBoost + DeBERTa-v3), 5-layer detection pipeline, explainable predictions, user feedback loop, and Docker deployment.**

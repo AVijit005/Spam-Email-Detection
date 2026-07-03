@@ -12,9 +12,9 @@ python -m venv .venv
 source .venv/bin/activate        # Linux/macOS
 # .\.venv\Scripts\activate       # Windows
 
-pip install -r backend/requirements.txt
-python model/train_model.py
-python backend/verify_model.py
+pip install -r requirements.txt
+# Model artifacts (model/hf_model/, model/spam_model.pkl, model/vectorizer.pkl) must exist.
+# Train them with: python model/train_model.py if missing.
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 

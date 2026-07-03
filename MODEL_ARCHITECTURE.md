@@ -334,10 +334,28 @@ User feedback is loaded from the configured backend (JSONL or MySQL):
 |---|---|---|
 | `spam_model.pkl` | Pickle | Trained XGBoost (or classical) model |
 | `vectorizer.pkl` | Pickle | TF-IDF vectorizer + meta feature config |
-| `transformer_model.pt` | PyTorch state_dict | DeBERTa-v3 weights for inference |
-| `transformer_tokenizer/` | HuggingFace save_pretrained | Tokenizer config and vocab |
+| `hf_model/` | HuggingFace model directory | Full DeBERTa-v3 model (config + safetensors + tokenizer) |
 | `model_metadata.json` | JSON | Training config, metrics, timestamps |
-| `*.sha256` | Text | SHA-256 integrity hashes for all pickle/PyTorch files |
+| `*.sha256` | Text | SHA-256 integrity hashes for all pickle/safetensors files |
+
+### HF-Native Model Directory
+
+The transformer is exported as a complete Hugging Face model directory:
+
+```
+model/hf_model/
+├── config.json               # DeBERTa-v3-base config, num_labels=2, id2label
+├── model.safetensors         # Full fine-tuned weights (fp16, ~352 MB)
+├── tokenizer.json            # SentencePiece tokenizer (128K vocab)
+├── tokenizer_config.json     # Tokenizer class, special tokens, max_length=512
+└── special_tokens_map.json   # Special token mappings (optional, embedded in tokenizer_config)
+```
+
+This replaces the previous state_dict-based deployment:
+- ~ `transformer_model.pt` (bare state_dict)
+- ~ `transformer_tokenizer/` (separate directory)
+
+The new format loads directly via `AutoModelForSequenceClassification.from_pretrained()` — no base model download, no `load_state_dict()` call. Eliminates ~703 MB of wasted cold-start downloads per instance.
 
 ### SHA-256 Integrity
 
@@ -349,8 +367,10 @@ model/
 ├── spam_model.pkl.sha256          # → "a3f8b2c1d4..."
 ├── vectorizer.pkl
 ├── vectorizer.pkl.sha256          # → "e5f1a3c7..."
-├── transformer_model.pt
-├── transformer_model.pt.sha256    # → "b4d2e9f6..."
+├── hf_model/
+│   ├── model.safetensors
+│   ├── model.safetensors.sha256   # → "b4d2e9f6..."
+│   └── ...
 ```
 
 At load time, each hash is verified using `hmac.compare_digest` for constant-time comparison. If the computed hash doesn't match the stored hash, a `ModelIntegrityError` is raised — the model is not loaded, and the app crashes (fail-fast principle).
