@@ -1,0 +1,83 @@
+# Ignore Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+ENV/
+env/
+
+# IDE
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model artifacts — exclude large files that can be regenerated
+model/checkpoints/
+model/hf_model/
+model/transformer_tokenizer/
+model/*.sha256
+
+# Legacy / refactored code
+backend/
+app/storage/*.legacy
+
+# Audit / diagnostic scripts
+__*.py
+__*.ps1
+__*.txt
+
+# Command code plans
+.commandcode/plans/
+
+# Logs
+*.log
+server.log
+backend/model/*.txt
+backend/data/feedback.jsonl
+
+# Temporary files
+*.tmp
+backend/tmp_info.txt
+backend/output.txt
+resize_icons.py
+check_data.py
+
+# NLTK data
+nltk_data/
+
+# Large datasets
+data/spam.csv
+# Local transformer checkpoint (do not commit)
+model/transformer_model.pt
+# Large training dataset
+data/spam.csv

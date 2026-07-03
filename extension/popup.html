@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spam Detector</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="particles-bg">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+    </div>
+
+    <div class="gradient-orb orb-1"></div>
+    <div class="gradient-orb orb-2"></div>
+    <div class="gradient-orb orb-3"></div>
+
+    <div class="container">
+        <div class="card">
+            <div class="header">
+                <div class="topbar">
+                    <button id="btn-settings" class="ghost-btn" type="button">Settings</button>
+                </div>
+                <div class="icon-wrapper">
+                    <div class="icon-glow"></div>
+                    <svg class="shield-icon" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#00f5ff;stop-opacity:1" />
+                                <stop offset="50%" style="stop-color:#8338ec;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#ff006e;stop-opacity:1" />
+                            </linearGradient>
+                            <filter id="glow">
+                                <feGaussianBlur stdDeviation="2" result="coloredBlur" />
+                                <feMerge>
+                                    <feMergeNode in="coloredBlur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
+                        </defs>
+                        <polygon points="50,5 90,28 90,72 50,95 10,72 10,28" fill="none" stroke="url(#shieldGrad)"
+                            stroke-width="2" opacity="0.6" filter="url(#glow)">
+                            <animate attributeName="opacity" values="0.4;0.8;0.4" dur="2s" repeatCount="indefinite" />
+                        </polygon>
+                        <polygon points="50,15 80,32 80,68 50,85 20,68 20,32" fill="none" stroke="#00f5ff"
+                            stroke-width="1.5" opacity="0.5">
+                            <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50"
+                                dur="20s" repeatCount="indefinite" />
+                        </polygon>
+                        <path d="M50,25 L70,35 L70,65 L50,80 L30,65 L30,35 Z" fill="url(#shieldGrad)" opacity="0.3"
+                            filter="url(#glow)">
+                            <animate attributeName="opacity" values="0.2;0.4;0.2" dur="3s" repeatCount="indefinite" />
+                        </path>
+                        <circle cx="50" cy="50" r="8" fill="#00f5ff" opacity="0.8" filter="url(#glow)">
+                            <animate attributeName="r" values="6;10;6" dur="1.5s" repeatCount="indefinite" />
+                            <animate attributeName="opacity" values="0.6;1;0.6" dur="1.5s" repeatCount="indefinite" />
+                        </circle>
+                    </svg>
+                </div>
+                <h1 class="title">
+                    <span class="title-word">Spam</span>
+                    <span class="title-word gradient-text">Detector</span>
+                </h1>
+                <p class="subtitle">
+                    <span class="ai-badge">AI</span>
+                    Local Gmail analysis
+                </p>
+                <div id="service-status" class="service-status">
+                    <span class="status-dot"></span>
+                    <span id="service-status-text">Checking backend...</span>
+                </div>
+                <div id="health-meta" class="health-meta hidden"></div>
+            </div>
+
+            <div class="content">
+                <div class="input-container">
+                    <label for="email-input" class="input-label">
+                        <span class="label-icon">📧</span>
+                        <span>Paste Email Here</span>
+                        <span class="label-pulse"></span>
+                    </label>
+                    <textarea
+                        id="email-input"
+                        class="email-textarea"
+                        placeholder="Paste the sender, subject, and body, or load the open Gmail message."
+                        spellcheck="false"
+                    ></textarea>
+                    <div class="textarea-effects">
+                        <div class="scan-line"></div>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button id="btn-get" class="btn btn-secondary" type="button">
+                        <span class="btn-ripple"></span>
+                        <span class="btn-content">Get from Gmail</span>
+                    </button>
+                    <button id="btn-analyze" class="btn btn-primary" type="button">
+                        <span class="btn-ripple"></span>
+                        <span class="btn-content">Analyze</span>
+                    </button>
+                </div>
+
+                <div id="result" class="result-box hidden">
+                    <div class="loader-container hidden">
+                        <div class="loader">
+                            <div class="loader-ring"></div>
+                            <div class="loader-ring"></div>
+                            <div class="loader-ring"></div>
+                        </div>
+                        <p class="loader-text">Analyzing...</p>
+                    </div>
+
+                    <div id="result-content" class="result-content hidden">
+                        <div class="result-icon-wrapper">
+                            <div class="result-icon"></div>
+                        </div>
+                        <h3 id="label" class="result-label"></h3>
+                        <div class="confidence-container">
+                            <div class="confidence-bar">
+                                <div id="confidence-fill" class="confidence-fill"></div>
+                                <div class="confidence-shimmer"></div>
+                            </div>
+                            <p id="confidence" class="confidence-text"></p>
+                        </div>
+                        <p id="reason" class="result-reason"></p>
+                        <p id="analysis" class="result-analysis"></p>
+                        <div id="result-meta" class="result-meta hidden"></div>
+
+                        <div id="explanations-section" class="subsection hidden">
+                            <h4 class="subsection-title">Why</h4>
+                            <ul id="explanations-list" class="bullet-list"></ul>
+                        </div>
+
+                        <div id="feedback-section" class="subsection hidden">
+                            <h4 class="subsection-title">Feedback</h4>
+                            <div class="feedback-actions">
+                                <button id="btn-feedback-correct" class="mini-btn" type="button">Looks Correct</button>
+                                <button id="btn-feedback-spam" class="mini-btn" type="button">Actually Spam</button>
+                                <button id="btn-feedback-safe" class="mini-btn" type="button">Actually Safe</button>
+                            </div>
+                            <p id="feedback-status" class="feedback-status hidden"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="history-section">
+                    <div class="history-header">
+                        <h3 class="section-title">Recent Scans</h3>
+                        <button id="btn-clear-history" class="ghost-btn small" type="button">Clear</button>
+                    </div>
+                    <div id="history-list" class="history-list">
+                        <p class="empty-state">No scans yet.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="footer">
+                <div class="status-wrapper">
+                    <span class="status-text">Ctrl/Cmd + Enter to analyze</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

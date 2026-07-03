@@ -1,0 +1,182 @@
+.spam-detector-banner {
+    margin: 0 0 12px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    line-height: 1.45;
+}
+
+.spam-detector-banner--spam {
+    background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
+    border-left: 5px solid #e11d48;
+    color: #881337;
+}
+
+.spam-detector-banner--safe {
+    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+    border-left: 5px solid #16a34a;
+    color: #166534;
+}
+
+.spam-detector-banner--trusted {
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    border-left: 5px solid #2563eb;
+    color: #1d4ed8;
+}
+
+.spam-detector-banner--warning {
+    background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+    border-left: 5px solid #ea580c;
+    color: #9a3412;
+}
+
+.spam-detector-banner__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.spam-detector-banner__badge {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.spam-detector-banner__confidence {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.spam-detector-banner__reason,
+.spam-detector-banner__analysis {
+    margin: 0;
+    font-size: 13px;
+}
+
+.spam-detector-banner__analysis {
+    margin-top: 6px;
+    opacity: 0.85;
+}
+
+.spam-detector-banner__signals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.spam-detector-banner__chip {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.spam-detector-banner__feedback {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.spam-detector-banner__feedback-label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.78;
+}
+
+.spam-detector-banner__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.spam-detector-banner__action {
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.spam-detector-banner__action:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(15, 23, 42, 0.12);
+}
+
+.spam-detector-banner__action:disabled {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.spam-detector-banner__action--neutral {
+    background: rgba(255, 255, 255, 0.72);
+    color: inherit;
+    border-color: rgba(15, 23, 42, 0.08);
+}
+
+.spam-detector-banner__action--danger {
+    background: rgba(190, 24, 93, 0.12);
+    color: #9f1239;
+    border-color: rgba(190, 24, 93, 0.18);
+}
+
+.spam-detector-banner__action--safe {
+    background: rgba(22, 163, 74, 0.12);
+    color: #166534;
+    border-color: rgba(22, 163, 74, 0.18);
+}
+
+.spam-detector-banner__feedback-status {
+    margin: 8px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.82;
+}
+
+@media (prefers-color-scheme: dark) {
+    .spam-detector-banner {
+        border-color: rgba(255, 255, 255, 0.08);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+    }
+
+    .spam-detector-banner--spam {
+        background: linear-gradient(135deg, rgba(225, 29, 72, 0.18) 0%, rgba(255, 0, 110, 0.08) 100%);
+        color: #fecdd3;
+    }
+
+    .spam-detector-banner--safe {
+        background: linear-gradient(135deg, rgba(22, 163, 74, 0.18) 0%, rgba(6, 255, 165, 0.08) 100%);
+        color: #bbf7d0;
+    }
+
+    .spam-detector-banner--trusted {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.18) 0%, rgba(59, 130, 246, 0.08) 100%);
+        color: #bfdbfe;
+    }
+
+    .spam-detector-banner--warning {
+        background: linear-gradient(135deg, rgba(234, 88, 12, 0.18) 0%, rgba(249, 115, 22, 0.08) 100%);
+        color: #fed7aa;
+    }
+
+    .spam-detector-banner__chip {
+        background: rgba(0, 0, 0, 0.25);
+    }
+
+    .spam-detector-banner__feedback {
+        border-top-color: rgba(255, 255, 255, 0.08);
+    }
+}
