@@ -159,6 +159,7 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
         return
 
     repo_id = os.environ.get("HF_MODEL_REPO_ID", "Avijit070/spam-email-deberta-v3")
+    hf_token = os.environ.get("HF_TOKEN")
 
     try:
         from huggingface_hub import snapshot_download
@@ -170,20 +171,43 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
         return
 
     import logging
+    import time
     logger = logging.getLogger(__name__)
     logger.info("Model files not found locally. Downloading %s from HuggingFace Hub...", repo_id)
-    try:
-        model_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(model_dir),
-            local_dir_use_symlinks=False,
-        )
-        logger.info("Download complete. Model cached at %s", model_dir)
-    except Exception as exc:
-        logger.warning(
-            "Failed to download model from HF Hub: %s. Running XGBoost-only.", exc
-        )
+
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            model_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_download(
+                repo_id=repo_id,
+                local_dir=str(model_dir),
+                token=hf_token,
+            )
+            # Post-download verification
+            if (model_dir / "config.json").exists():
+                downloaded = [f.name for f in model_dir.iterdir() if f.is_file()]
+                logger.info("Download complete. Files: %s", downloaded)
+                return
+            else:
+                logger.warning(
+                    "Download completed but config.json missing (attempt %d/%d).",
+                    attempt, max_retries,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Download attempt %d/%d failed: %s", attempt, max_retries, exc,
+            )
+
+        # Clean up partial downloads before retry
         if model_dir.exists():
             for f in model_dir.iterdir():
-                f.unlink(missing_ok=True)
+                if f.is_file():
+                    f.unlink(missing_ok=True)
+
+        if attempt < max_retries:
+            wait = 2 ** attempt
+            logger.info("Retrying in %ds...", wait)
+            time.sleep(wait)
+
+    logger.warning("All download attempts failed. Running XGBoost-only.")
