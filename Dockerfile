@@ -39,8 +39,15 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
 COPY . /app
-RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
-    chown -R appuser:appuser /app/data /app/model
+RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints
+
+# Pre-download transformer model during build (avoids 30min startup timeout)
+ARG HF_MODEL_REPO_ID=Avijit070/spam-email-deberta-v3
+RUN pip install --no-cache-dir huggingface_hub && \
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('${HF_MODEL_REPO_ID}', local_dir='/app/model/hf_model', local_dir_use_symlinks=False)" && \
+    rm -rf /root/.cache/huggingface
+
+RUN chown -R appuser:appuser /app/data /app/model
 
 USER appuser
 
