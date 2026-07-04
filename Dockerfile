@@ -16,13 +16,13 @@ WORKDIR /build
 
 COPY requirements.txt .
 
-# Step 1: CPU-only torch from PyTorch index (~200MB vs ~2GB CUDA)
+# Install CPU-only torch first, then everything else.
+# --find-links reuses torch's local wheels but we deduplicate afterward
 RUN pip wheel --wheel-dir /wheels \
-    torch --index-url https://download.pytorch.org/whl/cpu
-
-# Step 2: Everything else (find-links reuses the CPU torch wheel already built)
-RUN pip wheel --wheel-dir /wheels --find-links /wheels \
-    -r requirements.txt
+    torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip wheel --wheel-dir /wheels --find-links /wheels \
+    -r requirements.txt \
+    && rm -f /wheels/filelock-3.29.0*.whl
 
 # =============================================================================
 # Stage 2 — Runtime (minimal, no build tools)
