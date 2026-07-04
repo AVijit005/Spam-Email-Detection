@@ -16,12 +16,10 @@ WORKDIR /build
 
 COPY requirements.txt .
 
-# Step 1: CPU-only torch (~200MB) from PyTorch index
+# CPU-only torch from PyTorch index (~200MB vs ~2GB CUDA)
 RUN pip wheel --wheel-dir /wheels \
-    torch --index-url https://download.pytorch.org/whl/cpu
-
-# Step 2: Everything else, reusing existing wheels where possible
-RUN pip wheel --wheel-dir /wheels --find-links /wheels \
+    torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip wheel --wheel-dir /wheels --find-links /wheels \
     -r requirements.txt
 
 # =============================================================================
@@ -44,8 +42,8 @@ WORKDIR /app
 
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
-RUN pip install --no-cache-dir --find-links /wheels --no-index \
-    -r requirements.txt && rm -rf /wheels
+RUN pip install --no-cache-dir --find-links /wheels -r requirements.txt \
+    && rm -rf /wheels
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
