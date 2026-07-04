@@ -39,21 +39,14 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
 COPY . /app
-RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints
-
-# Pre-download transformer model during build (avoids 30min startup timeout)
-ARG HF_MODEL_REPO_ID=Avijit070/spam-email-deberta-v3
-RUN pip install --no-cache-dir huggingface_hub && \
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('${HF_MODEL_REPO_ID}', local_dir='/app/model/hf_model', local_dir_use_symlinks=False)" && \
-    rm -rf /root/.cache/huggingface
-
-RUN chown -R appuser:appuser /app/data /app/model
+RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
+    chown -R appuser:appuser /app/data /app/model
 
 USER appuser
 
 EXPOSE 7860
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
     CMD python -c "import os; from urllib.request import urlopen; urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/v1/health')" || exit 1
 
 CMD ["sh", "-c", "exec gunicorn app.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
