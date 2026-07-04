@@ -16,9 +16,12 @@ WORKDIR /build
 
 COPY requirements.txt .
 
-# Install CPU-only torch from PyTorch repo (200MB vs 2GB CUDA version)
+# Step 1: CPU-only torch from PyTorch index (~200MB vs ~2GB CUDA)
 RUN pip wheel --wheel-dir /wheels \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Step 2: Everything else (find-links reuses the CPU torch wheel already built)
+RUN pip wheel --wheel-dir /wheels --find-links /wheels \
     -r requirements.txt
 
 # =============================================================================
