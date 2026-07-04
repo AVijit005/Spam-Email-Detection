@@ -5,7 +5,7 @@ colorFrom: red
 colorTo: blue
 sdk: docker
 pinned: true
-app_port: 8000
+app_port: 7860
 ---
 
 # 🛡️ Spam Email Detection — Dual-Track ML for Gmail Protection
