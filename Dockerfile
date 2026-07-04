@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Only install what the Space actually needs (no datasets, lightgbm, optuna, accelerate)
+# Only install what the Space actually needs
 RUN printf '%s\n' \
     "fastapi>=0.110.0" \
     "uvicorn[standard]>=0.27.0" \
@@ -38,10 +38,9 @@ RUN printf '%s\n' \
     "xgboost>=2.0.0" \
     > requirements-slim.txt
 
-# CPU-only torch from PyTorch index (~200MB vs ~2GB CUDA)
+# Single pip wheel step: CPU torch from PyTorch extra-index, rest from PyPI
 RUN pip wheel --wheel-dir /wheels \
-    torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip wheel --wheel-dir /wheels --find-links /wheels \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
     -r requirements-slim.txt
 
 # =============================================================================
@@ -63,9 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-COPY --from=builder /build/requirements-slim.txt /tmp/requirements-slim.txt
-RUN pip install --no-cache-dir --find-links /wheels /tmp/requirements-slim.txt \
-    && rm -rf /wheels /tmp/requirements-slim.txt
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
