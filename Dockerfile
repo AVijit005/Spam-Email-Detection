@@ -16,13 +16,13 @@ WORKDIR /build
 
 COPY requirements.txt .
 
-# Install CPU-only torch first, then everything else.
-# --find-links reuses torch's local wheels but we deduplicate afterward
+# Step 1: CPU-only torch (~200MB) from PyTorch index
 RUN pip wheel --wheel-dir /wheels \
-    torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip wheel --wheel-dir /wheels --find-links /wheels \
-    -r requirements.txt \
-    && rm -f /wheels/filelock-3.29.0*.whl
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Step 2: Everything else, reusing existing wheels where possible
+RUN pip wheel --wheel-dir /wheels --find-links /wheels \
+    -r requirements.txt
 
 # =============================================================================
 # Stage 2 — Runtime (minimal, no build tools)
@@ -43,7 +43,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+COPY requirements.txt .
+RUN pip install --no-cache-dir --find-links /wheels --no-index \
+    -r requirements.txt && rm -rf /wheels
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
