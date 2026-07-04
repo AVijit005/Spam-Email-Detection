@@ -14,13 +14,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-COPY requirements.txt .
+# Only install what the Space actually needs (no datasets, lightgbm, optuna, accelerate)
+RUN printf '%s\n' \
+    "fastapi>=0.110.0" \
+    "uvicorn[standard]>=0.27.0" \
+    "gunicorn>=21.0.0" \
+    "scikit-learn>=1.4.0" \
+    "pandas>=2.1.0" \
+    "numpy>=1.26.0" \
+    "scipy>=1.12.0" \
+    "joblib>=1.3.0" \
+    "nltk>=3.8.0" \
+    "psutil>=5.9.0" \
+    "tqdm>=4.66.0" \
+    "httpx>=0.27.0" \
+    "PyMySQL>=1.1.0" \
+    "pydantic-settings>=2.1.0" \
+    "slowapi>=0.1.9" \
+    "safetensors>=0.4.0" \
+    "huggingface-hub>=0.23.0" \
+    "torch>=2.2.0" \
+    "transformers>=4.38.0" \
+    "xgboost>=2.0.0" \
+    > requirements-slim.txt
 
 # CPU-only torch from PyTorch index (~200MB vs ~2GB CUDA)
 RUN pip wheel --wheel-dir /wheels \
     torch --index-url https://download.pytorch.org/whl/cpu \
     && pip wheel --wheel-dir /wheels --find-links /wheels \
-    -r requirements.txt
+    -r requirements-slim.txt
 
 # =============================================================================
 # Stage 2 — Runtime (minimal, no build tools)
@@ -41,9 +63,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-COPY requirements.txt .
-RUN pip install --no-cache-dir --find-links /wheels -r requirements.txt \
-    && rm -rf /wheels
+COPY --from=builder /build/requirements-slim.txt /tmp/requirements-slim.txt
+RUN pip install --no-cache-dir --find-links /wheels /tmp/requirements-slim.txt \
+    && rm -rf /wheels /tmp/requirements-slim.txt
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
