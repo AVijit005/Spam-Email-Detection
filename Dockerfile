@@ -15,7 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 COPY requirements.txt .
-RUN pip wheel --wheel-dir /wheels -r requirements.txt
+
+# Install CPU-only torch from PyTorch repo (200MB vs 2GB CUDA version)
+RUN pip wheel --wheel-dir /wheels \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements.txt
 
 # =============================================================================
 # Stage 2 — Runtime (minimal, no build tools)
