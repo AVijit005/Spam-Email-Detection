@@ -158,7 +158,7 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
     if (model_dir / "config.json").exists():
         return
 
-    repo_id = os.environ.get("HF_MODEL_REPO_ID", "pavitra55/spam-email-deberta-v3")
+    repo_id = os.environ.get("HF_MODEL_REPO_ID", "Avijit070/spam-email-deberta-v3")
 
     try:
         from huggingface_hub import snapshot_download
