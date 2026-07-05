@@ -1,6 +1,6 @@
 const BANNER_ID = "spam-detector-banner";
 const ANALYZE_DEBOUNCE_MS = 900;
-const MESSAGE_TIMEOUT_MS = 30000;
+const MESSAGE_TIMEOUT_MS = 60000;
 
 let analyzeTimer = null;
 let lastSignature = "";
