@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
+    libgomp1 git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --shell /bin/bash user
@@ -25,6 +25,9 @@ USER user
 
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH
+
+# Pre-download DeBERTa model into the image (as user, so cache is in /home/user)
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('Avijit070/spam-email-deberta-v3', local_dir='/app/model/hf_model')"
 
 EXPOSE 7860
 

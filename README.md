@@ -7,8 +7,6 @@ sdk: docker
 pinned: true
 app_port: 7860
 startup_duration_timeout: 1h
-preload_from_hub:
-  - Avijit070/spam-email-deberta-v3
 ---
 
 # 🛡️ Spam Email Detection — Dual-Track ML for Gmail Protection
