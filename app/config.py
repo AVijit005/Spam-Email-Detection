@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
 
     allow_origin_regex: str = (
-        r"^(chrome-extension://[a-z]{32,64}|moz-extension://[a-z0-9-]{8,64}|"
+        r"^(chrome-extension://[a-z0-9]{32,64}|moz-extension://[a-z0-9-]{8,64}|"
         r"http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?|"
         r"https://[a-zA-Z0-9-]+\.hf\.space)$"
     )
