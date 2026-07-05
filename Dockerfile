@@ -26,7 +26,6 @@ RUN pip wheel --wheel-dir /wheels --find-links /wheels \
     pydantic-settings slowapi safetensors \
     huggingface-hub transformers xgboost
 
-# Remove duplicate older wheels (keep newest version of each package)
 COPY scripts/dedup_wheels.py /tmp/dedup_wheels.py
 RUN python3 /tmp/dedup_wheels.py
 
@@ -38,15 +37,16 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-RUN useradd --create-home --shell /bin/bash appuser \
-    && apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --shell /bin/bash appuser
 
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+RUN pip install --no-cache-dir --no-deps /wheels/*.whl && rm -rf /wheels
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
