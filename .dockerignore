@@ -23,9 +23,5 @@ Dockerfile
 docker-compose.yml
 README.md
 notebooks/
-scripts/
-extension/
-training/
-tests/
 *.ipynb
 LICENSE
