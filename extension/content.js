@@ -106,28 +106,35 @@ function createBanner(prediction, payload) {
     const badge = document.createElement("span");
     badge.className = "spam-detector-banner__badge";
     badge.textContent = prediction.label === "Spam"
-        ? "Spam alert"
+        ? "Spam"
         : prediction.label === "whitelisted"
             ? "Whitelisted"
-            : "Looks safe";
+            : "Safe";
 
     const confidence = document.createElement("span");
     confidence.className = "spam-detector-banner__confidence";
-    confidence.textContent = `${Math.round((prediction.confidence || 0) * 100)}% confidence`;
+    confidence.textContent = `${Math.round((prediction.confidence || 0) * 100)}%`;
 
-    header.append(badge, confidence);
+    const expandIcon = document.createElement("span");
+    expandIcon.className = "spam-detector-banner__expand-icon";
+    expandIcon.textContent = "\u25B6";
+
+    header.append(badge, confidence, expandIcon);
     banner.appendChild(header);
+
+    const details = document.createElement("div");
+    details.className = "spam-detector-banner__details";
 
     const reason = document.createElement("p");
     reason.className = "spam-detector-banner__reason";
     reason.textContent = prediction.reason || "Analysis completed.";
-    banner.appendChild(reason);
+    details.appendChild(reason);
 
     if (prediction.analysis) {
         const analysis = document.createElement("p");
         analysis.className = "spam-detector-banner__analysis";
         analysis.textContent = prediction.analysis;
-        banner.appendChild(analysis);
+        details.appendChild(analysis);
     }
 
     const cues = (prediction.explanations?.length ? prediction.explanations : prediction.signals || []).slice(0, 3);
@@ -140,15 +147,11 @@ function createBanner(prediction, payload) {
             chip.textContent = signal;
             signals.appendChild(chip);
         });
-        banner.appendChild(signals);
+        details.appendChild(signals);
     }
 
     const feedbackSection = document.createElement("div");
     feedbackSection.className = "spam-detector-banner__feedback";
-
-    const feedbackLabel = document.createElement("span");
-    feedbackLabel.className = "spam-detector-banner__feedback-label";
-    feedbackLabel.textContent = "Feedback";
 
     const feedbackActions = document.createElement("div");
     feedbackActions.className = "spam-detector-banner__actions";
@@ -176,8 +179,13 @@ function createBanner(prediction, payload) {
 
     buttons.push(correctButton, spamButton, safeButton);
     feedbackActions.append(correctButton, spamButton, safeButton);
-    feedbackSection.append(feedbackLabel, feedbackActions, feedbackStatus);
-    banner.appendChild(feedbackSection);
+    feedbackSection.append(feedbackActions, feedbackStatus);
+    details.appendChild(feedbackSection);
+    banner.appendChild(details);
+
+    header.addEventListener("click", () => {
+        banner.classList.toggle("spam-detector-banner--expanded");
+    });
 
     return banner;
 }
