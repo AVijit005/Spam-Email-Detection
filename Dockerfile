@@ -1,5 +1,5 @@
 # =============================================================================
-# Stage 1 — Build all wheels (fast, runs once)
+# Stage 1 — Build all wheels with network
 # =============================================================================
 FROM python:3.11-slim AS builder
 
@@ -12,16 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
-
-# CPU-only torch first
 RUN pip wheel --wheel-dir /wheels \
     torch --index-url https://download.pytorch.org/whl/cpu
 
-# All runtime deps
 RUN pip wheel --wheel-dir /wheels --find-links /wheels \
-    fastapi "uvicorn>=0.27.0" gunicorn \
-    "scikit-learn>=1.4.0" "pandas>=2.1.0" "numpy>=1.26.0" "scipy>=1.12.0" \
+    fastapi uvicorn gunicorn \
+    scikit-learn pandas numpy scipy \
     joblib nltk psutil tqdm httpx PyMySQL \
     pydantic-settings slowapi safetensors \
     huggingface-hub transformers xgboost
@@ -30,9 +26,9 @@ COPY scripts/dedup_wheels.py /tmp/dedup_wheels.py
 RUN python3 /tmp/dedup_wheels.py
 
 # =============================================================================
-# Stage 2 — Install from pre-built wheels only (instant, no network)
+# Stage 2 — Runtime
 # =============================================================================
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -46,7 +42,7 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir --find-links /wheels --no-index /wheels/*.whl && rm -rf /wheels
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
