@@ -46,7 +46,7 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir --no-deps /wheels/*.whl && rm -rf /wheels
+RUN pip install --no-cache-dir --find-links /wheels --no-index /wheels/*.whl && rm -rf /wheels
 
 COPY . /app
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
