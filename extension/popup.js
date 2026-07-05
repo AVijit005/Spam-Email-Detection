@@ -69,8 +69,8 @@ document.addEventListener("DOMContentLoaded", () => {
     function setLoadingState(isLoading) {
         elements.btnGet.disabled = isLoading;
         elements.btnAnalyze.disabled = isLoading;
-        resetResultState();
         if (isLoading) {
+            resetResultState();
             elements.resultBox.classList.add("visible");
             elements.loaderContainer.classList.remove("hidden");
         } else {
