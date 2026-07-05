@@ -1,15 +1,36 @@
 (() => {
     const SELECTORS = {
-        sender: [".gD[email]", ".go [email]"],
-        subject: ["h2.hP", ".hP"],
-        body: [".a3s.aiL", ".a3s"]
+        sender: [
+            "span[email]",
+            ".gD[email]",
+            ".go[email]",
+            ".yW span[email]",
+            "span[data-hovercard-with-tooltip]"
+        ],
+        subject: [
+            "h2.hP",
+            "h1.hP",
+            ".hP",
+            "[data-thread-perm-id]"
+        ],
+        body: [
+            ".a3s.aiL",
+            ".a3s",
+            ".ii.gt div[dir]",
+            "[role='main'] .a3s",
+            ".gs .a3s"
+        ]
     };
 
     function queryFirst(selectors) {
         for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-                return element;
+            try {
+                const element = document.querySelector(selector);
+                if (element) {
+                    return element;
+                }
+            } catch (e) {
+                // invalid selector, skip
             }
         }
         return null;
@@ -23,12 +44,19 @@
 
     function getSender() {
         const element = queryFirst(SELECTORS.sender);
-        return cleanText(element?.getAttribute("email") || element?.textContent || "");
+        if (!element) return "";
+        return cleanText(
+            element.getAttribute("email")
+            || element.getAttribute("name")
+            || element.textContent
+            || ""
+        );
     }
 
     function getSubject() {
         const element = queryFirst(SELECTORS.subject);
-        return cleanText(element?.textContent || "");
+        if (!element) return "";
+        return cleanText(element.textContent || "");
     }
 
     function getBodyElement() {
@@ -36,7 +64,9 @@
     }
 
     function getBody() {
-        return cleanText(getBodyElement()?.innerText || "");
+        const el = getBodyElement();
+        if (!el) return "";
+        return cleanText(el.innerText || el.textContent || "");
     }
 
     function getBannerAnchor() {
@@ -46,6 +76,7 @@
         }
 
         return bodyElement.closest(".adn.ads")
+            || bodyElement.closest("[data-legacy-message-id]")
             || bodyElement.parentElement
             || bodyElement;
     }
