@@ -27,14 +27,33 @@ document.addEventListener("DOMContentLoaded", () => {
         historyList: document.getElementById("history-list")
     };
 
+    const missingElements = Object.entries(elements).filter(([, el]) => !el);
+    if (missingElements.length) {
+        console.warn("Spam detector: missing DOM elements:", missingElements.map(([k]) => k).join(", "));
+    }
+
     let currentPayload = null;
     let currentPrediction = null;
     let confidenceBarTimer = null;
     let historyLoadCount = 0;
+    let isLoadingFromGmail = false;
+    let feedbackInFlight = false;
+    let isAnalyzing = false;
 
     function runtimeMessage(message) {
         return new Promise((resolve, reject) => {
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    reject(new Error("Extension message timed out."));
+                }
+            }, 60000);
+
             chrome.runtime.sendMessage(message, (response) => {
+                clearTimeout(timer);
+                if (settled) return;
+                settled = true;
                 if (chrome.runtime.lastError) {
                     reject(new Error(chrome.runtime.lastError.message));
                     return;
@@ -146,16 +165,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const line = lines[i];
             const senderMatch = line.match(/^\s*From:\s*(.+)/i);
             const subjectMatch = line.match(/^\s*Subject:\s*(.+)/i);
+
             if (senderMatch && !sender) {
                 sender = senderMatch[1].trim();
                 bodyStartIndex = i + 1;
             } else if (subjectMatch && !subject) {
                 subject = subjectMatch[1].trim();
                 bodyStartIndex = i + 1;
-            } else if (line.trim() === "" && bodyStartIndex > 0 && i === bodyStartIndex) {
+            } else if (line.trim() === "") {
                 bodyStartIndex = i + 1;
-            } else {
                 break;
+            } else {
+                bodyStartIndex = i + 1;
             }
         }
 
@@ -179,7 +200,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         explanations.slice(0, 4).forEach((entry) => {
             const item = document.createElement("li");
-            item.textContent = entry;
+            item.textContent = typeof entry === "string" ? entry : String(entry);
             elements.explanationsList.appendChild(item);
         });
         elements.explanationsSection.classList.remove("hidden");
@@ -192,9 +213,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         elements.feedbackSection.classList.remove("hidden");
-        elements.btnFeedbackCorrect.disabled = false;
-        elements.btnFeedbackSpam.disabled = false;
-        elements.btnFeedbackSafe.disabled = false;
+        if (!feedbackInFlight) {
+            elements.btnFeedbackCorrect.disabled = false;
+            elements.btnFeedbackSpam.disabled = false;
+            elements.btnFeedbackSafe.disabled = false;
+        }
     }
 
     function renderResult(data, payload) {
@@ -211,15 +234,16 @@ document.addEventListener("DOMContentLoaded", () => {
         elements.resultBox.classList.add("visible");
         elements.resultContent.classList.remove("hidden");
 
-        const cssClass = data.label === "Spam"
+        const validLabel = typeof data.label === "string" ? data.label : "";
+        const cssClass = validLabel === "Spam"
             ? "spam"
-            : data.label === "whitelisted"
+            : validLabel === "whitelisted"
                 ? "whitelisted"
                 : "safe";
 
-        const displayLabel = data.label === "whitelisted"
+        const displayLabel = validLabel === "whitelisted"
             ? "WHITELISTED"
-            : (data.label || "UNKNOWN").toUpperCase();
+            : (validLabel || "UNKNOWN").toUpperCase();
 
         elements.resultBox.classList.add(cssClass);
         elements.label.textContent = displayLabel;
@@ -266,6 +290,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function loadFromGmail() {
+        if (isLoadingFromGmail) return;
+        isLoadingFromGmail = true;
         getActiveTab().then((tab) => {
             if (!tab || !tab.id) {
                 alert("Open a Gmail message before using Get from Gmail.");
@@ -290,10 +316,13 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }).catch(() => {
             alert("Could not access the current tab.");
+        }).finally(() => {
+            isLoadingFromGmail = false;
         });
     }
 
     async function analyzeCurrentInput() {
+        if (isAnalyzing) return;
         const emailText = elements.emailInput.value.trim();
         if (!emailText) {
             currentPrediction = null;
@@ -303,6 +332,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        isAnalyzing = true;
         const payload = parseEmail(emailText);
         setLoadingState(true);
 
@@ -319,12 +349,14 @@ document.addEventListener("DOMContentLoaded", () => {
             updateServiceStatus("Backend offline", false);
         } finally {
             setLoadingState(false);
+            isAnalyzing = false;
         }
     }
 
     async function submitFeedback(userLabel) {
-        if (!currentPrediction || !currentPayload) return;
+        if (!currentPrediction || !currentPayload || feedbackInFlight) return;
 
+        feedbackInFlight = true;
         elements.btnFeedbackCorrect.disabled = true;
         elements.btnFeedbackSpam.disabled = true;
         elements.btnFeedbackSafe.disabled = true;
@@ -345,12 +377,16 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             elements.feedbackStatus.textContent = `Saved feedback (${String(response?.verdict || "ok").replace(/_/g, " ")}).`;
             elements.feedbackStatus.classList.remove("hidden");
+            setTimeout(() => {
+                elements.feedbackStatus.classList.add("hidden");
+            }, 3000);
             loadHistory();
             refreshBackendStatus();
         } catch (error) {
             elements.feedbackStatus.textContent = error.message || "Could not save feedback.";
             elements.feedbackStatus.classList.remove("hidden");
         } finally {
+            feedbackInFlight = false;
             elements.btnFeedbackCorrect.disabled = false;
             elements.btnFeedbackSpam.disabled = false;
             elements.btnFeedbackSafe.disabled = false;
@@ -359,6 +395,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function historyBadgeClass(label) {
         if (label === "Spam") return "history-badge spam";
+        if (label === "Not Spam") return "history-badge safe";
         if (label === "whitelisted") return "history-badge whitelisted";
         return "history-badge safe";
     }
@@ -369,51 +406,56 @@ document.addEventListener("DOMContentLoaded", () => {
             const history = await runtimeMessage({ command: "get_scan_history" });
             if (loadId !== historyLoadCount) return;
 
-            elements.historyList.innerHTML = "";
+            const fragment = document.createDocumentFragment();
 
             if (!Array.isArray(history) || !history.length) {
-                elements.historyList.innerHTML = "<p class=\"empty-state\">No scans yet.</p>";
-                return;
+                const empty = document.createElement("p");
+                empty.className = "empty-state";
+                empty.textContent = "No scans yet.";
+                fragment.appendChild(empty);
+            } else {
+                history.slice(0, 6).forEach((entry) => {
+                    const item = document.createElement("div");
+                    item.className = "history-item";
+
+                    const title = document.createElement("div");
+                    title.className = "history-title";
+                    title.textContent = entry.subject || "(No subject)";
+
+                    const meta = document.createElement("div");
+                    meta.className = "history-meta-row";
+
+                    const badgeSpan = document.createElement("span");
+                    badgeSpan.className = historyBadgeClass(entry.label);
+                    badgeSpan.textContent = entry.label || "Unknown";
+
+                    const confidenceSpan = document.createElement("span");
+                    confidenceSpan.textContent = `${Math.round((entry.confidence || 0) * 100)}%`;
+
+                    const dateSpan = document.createElement("span");
+                    dateSpan.textContent = formatDate(entry.evaluatedAtUtc);
+
+                    meta.append(badgeSpan, confidenceSpan, dateSpan);
+
+                    const sender = document.createElement("div");
+                    sender.className = "history-sender";
+                    sender.textContent = entry.sender || entry.senderDomain || "Unknown sender";
+
+                    item.append(title, sender, meta);
+
+                    if (entry.verdict) {
+                        const verdict = document.createElement("div");
+                        verdict.className = "history-verdict";
+                        verdict.textContent = `Feedback: ${String(entry.verdict).replace(/_/g, " ")}`;
+                        item.appendChild(verdict);
+                    }
+
+                    fragment.appendChild(item);
+                });
             }
 
-            history.slice(0, 6).forEach((entry) => {
-                const item = document.createElement("div");
-                item.className = "history-item";
-
-                const title = document.createElement("div");
-                title.className = "history-title";
-                title.textContent = entry.subject || "(No subject)";
-
-                const meta = document.createElement("div");
-                meta.className = "history-meta-row";
-
-                const badgeSpan = document.createElement("span");
-                badgeSpan.className = historyBadgeClass(entry.label);
-                badgeSpan.textContent = entry.label || "Unknown";
-
-                const confidenceSpan = document.createElement("span");
-                confidenceSpan.textContent = `${Math.round((entry.confidence || 0) * 100)}%`;
-
-                const dateSpan = document.createElement("span");
-                dateSpan.textContent = formatDate(entry.evaluatedAtUtc);
-
-                meta.append(badgeSpan, confidenceSpan, dateSpan);
-
-                const sender = document.createElement("div");
-                sender.className = "history-sender";
-                sender.textContent = entry.sender || entry.senderDomain || "Unknown sender";
-
-                item.append(title, sender, meta);
-
-                if (entry.verdict) {
-                    const verdict = document.createElement("div");
-                    verdict.className = "history-verdict";
-                    verdict.textContent = `Feedback: ${String(entry.verdict).replace(/_/g, " ")}`;
-                    item.appendChild(verdict);
-                }
-
-                elements.historyList.appendChild(item);
-            });
+            elements.historyList.innerHTML = "";
+            elements.historyList.appendChild(fragment);
         } catch (error) {
             if (loadId !== historyLoadCount) return;
             elements.historyList.innerHTML = "<p class=\"empty-state\">Could not load scan history.</p>";
@@ -429,8 +471,8 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             await runtimeMessage({ command: "clear_scan_history" });
         } catch (error) {
-            elements.feedbackStatus.textContent = "Could not clear history.";
-            elements.feedbackStatus.classList.remove("hidden");
+            elements.serviceStatusText.textContent = "Could not clear history.";
+            elements.serviceStatus.classList.add("offline");
         }
         loadHistory();
     });

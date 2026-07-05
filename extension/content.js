@@ -8,7 +8,7 @@ let analysisInFlight = false;
 let autoScanEnabled = true;
 let pendingForce = false;
 let feedbackInFlight = false;
-let confidenceBarTimer = null;
+let bodyObserver = null;
 
 function runtimeMessage(message) {
     return new Promise((resolve, reject) => {
@@ -95,12 +95,12 @@ async function submitBannerFeedback(payload, prediction, userLabel, statusNode, 
         });
         statusNode.textContent = `Feedback saved (${String(response?.verdict || "ok").replace(/_/g, " ")}).`;
     } catch (error) {
-        actionButtons.forEach((button) => {
-            button.disabled = false;
-        });
         statusNode.textContent = error.message || "Could not save feedback.";
     } finally {
         feedbackInFlight = false;
+        actionButtons.forEach((button) => {
+            button.disabled = false;
+        });
     }
 }
 
@@ -166,7 +166,7 @@ function createBanner(prediction, payload) {
         details.appendChild(analysis);
     }
 
-    const rawCues = prediction.explanations?.length
+    const rawCues = Array.isArray(prediction.explanations) && prediction.explanations.length
         ? prediction.explanations
         : Array.isArray(prediction.signals) ? prediction.signals : [];
     const cues = rawCues.slice(0, 3);
@@ -233,21 +233,6 @@ function injectBanner(prediction, payload) {
     anchor.insertBefore(banner, anchor.firstChild);
 }
 
-function injectWarningBanner(message) {
-    removeBanner();
-    const banner = document.createElement("section");
-    banner.id = BANNER_ID;
-    banner.className = "spam-detector-banner spam-detector-banner--warning";
-    const text = document.createElement("p");
-    text.className = "spam-detector-banner__reason";
-    text.textContent = message;
-    banner.appendChild(text);
-    const anchor = window.DomParser?.getBannerAnchor?.();
-    if (anchor) {
-        anchor.insertBefore(banner, anchor.firstChild);
-    }
-}
-
 async function analyzeOpenEmail(force = false) {
     const data = readCurrentEmailData();
     if (!data || (!data.subject && !data.body)) {
@@ -263,8 +248,9 @@ async function analyzeOpenEmail(force = false) {
         return;
     }
 
-    analysisInFlight = true;
+    const previousSignature = lastSignature;
     lastSignature = currentSignature;
+    analysisInFlight = true;
     const analysisSignature = currentSignature;
 
     try {
@@ -277,6 +263,7 @@ async function analyzeOpenEmail(force = false) {
             injectBanner(prediction, freshData || data);
         }
     } catch (error) {
+        lastSignature = previousSignature;
         const freshData = readCurrentEmailData();
         if (emailSignature(freshData) === analysisSignature) {
             console.warn("Spam detector could not analyze email:", error.message);
@@ -294,13 +281,14 @@ function scheduleAnalysis(force = false) {
     analyzeTimer = setTimeout(() => {
         const shouldForce = pendingForce;
         pendingForce = false;
-        analyzeOpenEmail(shouldForce);
+        analyzeOpenEmail(shouldForce).catch(() => {});
     }, ANALYZE_DEBOUNCE_MS);
 }
 
 function setupObserver() {
     if (!document.body) return;
-    const observer = new MutationObserver((mutations) => {
+    if (bodyObserver) return;
+    bodyObserver = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
             if (mutation.addedNodes.length > 0) {
                 scheduleAnalysis(false);
@@ -308,29 +296,40 @@ function setupObserver() {
             }
         }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    bodyObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 if (document.body) {
     setupObserver();
 } else {
-    document.addEventListener("DOMContentLoaded", setupObserver);
+    const onReady = () => {
+        document.removeEventListener("DOMContentLoaded", onReady);
+        setupObserver();
+    };
+    document.addEventListener("DOMContentLoaded", onReady);
 }
 
 document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-        refreshSettings().then(() => scheduleAnalysis(true));
+        refreshSettings().then(() => scheduleAnalysis(true)).catch(() => {
+            scheduleAnalysis(true);
+        });
     }
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request?.command === "get_email_data") {
-        sendResponse(readCurrentEmailData());
+        try {
+            sendResponse(readCurrentEmailData());
+        } catch (error) {
+            sendResponse(null);
+        }
     }
 });
 
 refreshSettings().then(() => {
     scheduleAnalysis(true);
-}).catch(() => {
+}).catch((error) => {
+    console.warn("Spam detector: could not load settings, using defaults.", error);
     scheduleAnalysis(true);
 });

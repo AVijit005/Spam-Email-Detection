@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const predictionCache = new Map();
+const pendingAnalyses = new Map();
 const CACHE_TTL_MS = 90 * 1000;
 const CACHE_MAX_SIZE = 50;
 let historyLock = Promise.resolve();
@@ -35,16 +36,21 @@ chrome.runtime.onInstalled.addListener((details) => {
     });
 });
 
-function normalizePayload(payload = {}) {
+function normalizePayload(payload) {
+    const safe = (payload && typeof payload === "object") ? payload : {};
     return {
-        sender: typeof payload.sender === "string" ? payload.sender.trim() : "",
-        subject: typeof payload.subject === "string" ? payload.subject.trim() : "",
-        body: typeof payload.body === "string" ? payload.body.trim() : ""
+        sender: typeof safe.sender === "string" ? safe.sender.trim() : "",
+        subject: typeof safe.subject === "string" ? safe.subject.trim() : "",
+        body: typeof safe.body === "string" ? safe.body.trim() : ""
     };
 }
 
 function cacheKey(payload) {
-    return JSON.stringify([payload.sender, payload.subject, payload.body]);
+    return JSON.stringify([
+        (payload.sender || "").toLowerCase(),
+        (payload.subject || "").toLowerCase(),
+        (payload.body || "").toLowerCase()
+    ]);
 }
 
 function evictCacheIfNeeded() {
@@ -75,12 +81,17 @@ function getCachedPrediction(key) {
 }
 
 async function getSettings() {
-    const data = await chrome.storage.sync.get("settings");
-    const stored = data.settings || {};
-    return {
-        ...DEFAULT_SETTINGS,
-        ...stored
-    };
+    try {
+        const data = await chrome.storage.sync.get("settings");
+        const stored = data.settings || {};
+        return {
+            ...DEFAULT_SETTINGS,
+            ...stored
+        };
+    } catch (error) {
+        console.error("Failed to load settings:", error);
+        return { ...DEFAULT_SETTINGS };
+    }
 }
 
 function normalizeApiBaseUrl(url) {
@@ -185,15 +196,15 @@ async function pushHistoryEntry(payload, prediction) {
         const settings = await getSettings();
         const history = await getScanHistory();
         const nextEntry = {
-            predictionId: prediction.prediction_id,
-            evaluatedAtUtc: prediction.evaluated_at_utc,
-            label: prediction.label,
-            confidence: prediction.confidence,
-            subject: payload.subject,
-            sender: payload.sender,
-            senderDomain: prediction.sender_domain,
-            reason: prediction.reason,
-            ruleLayer: prediction.rule_layer,
+            predictionId: prediction.prediction_id || "",
+            evaluatedAtUtc: prediction.evaluated_at_utc || new Date().toISOString(),
+            label: prediction.label || "Unknown",
+            confidence: typeof prediction.confidence === "number" ? prediction.confidence : 0,
+            subject: payload.subject || "",
+            sender: payload.sender || "",
+            senderDomain: prediction.sender_domain || "",
+            reason: prediction.reason || "",
+            ruleLayer: prediction.rule_layer || "",
             userLabel: null,
             verdict: null
         };
@@ -243,25 +254,38 @@ async function analyzeEmail(payload) {
         return cached;
     }
 
-    const prediction = await fetchJson("/v1/predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(normalized)
-    });
-
-    predictionCache.set(key, {
-        timestamp: Date.now(),
-        value: prediction
-    });
-    evictCacheIfNeeded();
-
-    try {
-        await pushHistoryEntry(normalized, prediction);
-    } catch (error) {
-        console.error("Failed to save history entry:", error);
+    if (pendingAnalyses.has(key)) {
+        return pendingAnalyses.get(key);
     }
 
-    return prediction;
+    const analysisPromise = (async () => {
+        try {
+            const prediction = await fetchJson("/v1/predict", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(normalized)
+            });
+
+            predictionCache.set(key, {
+                timestamp: Date.now(),
+                value: prediction
+            });
+            evictCacheIfNeeded();
+
+            try {
+                await pushHistoryEntry(normalized, prediction);
+            } catch (error) {
+                console.error("Failed to save history entry:", error);
+            }
+
+            return prediction;
+        } finally {
+            pendingAnalyses.delete(key);
+        }
+    })();
+
+    pendingAnalyses.set(key, analysisPromise);
+    return analysisPromise;
 }
 
 async function checkBackendHealth() {
@@ -278,12 +302,18 @@ async function submitFeedback(payload) {
         body: JSON.stringify(payload)
     });
     const verdict = response.verdict || "ok";
-    await updateHistoryFeedback(payload.prediction_id, payload.user_label, verdict);
+    try {
+        await updateHistoryFeedback(payload.prediction_id, payload.user_label, verdict);
+    } catch (error) {
+        console.error("Failed to update local history after feedback:", error);
+    }
     return response;
 }
 
 async function retrainModel() {
     const settings = await getSettings();
+    predictionCache.clear();
+    pendingAnalyses.clear();
     const response = await fetchJson("/v1/retrain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -292,7 +322,6 @@ async function retrainModel() {
         ...settings,
         requestTimeoutMs: Math.max(settings.requestTimeoutMs, 15 * 60 * 1000)
     });
-    predictionCache.clear();
     return response;
 }
 
@@ -301,66 +330,99 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (command === "analyze_email") {
         analyzeEmail(request.payload)
-            .then((data) => sendResponse({ ok: true, data }))
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
             .catch((error) => {
                 console.error("Prediction request failed", error);
-                sendResponse({ ok: false, error: error.message || "Prediction failed." });
+                try { sendResponse({ ok: false, error: error.message || "Prediction failed." }); } catch (e) {}
             });
         return true;
     }
 
     if (command === "check_backend_health") {
         checkBackendHealth()
-            .then((data) => sendResponse({ ok: true, data }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Backend is unavailable." }));
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Backend is unavailable." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "get_settings") {
         getSettings()
-            .then((data) => sendResponse({ ok: true, data }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Could not load settings." }));
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Could not load settings." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "save_settings") {
         saveSettings(request.payload)
-            .then((data) => sendResponse({ ok: true, data }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Could not save settings." }));
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Could not save settings." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "get_scan_history") {
         getScanHistory()
-            .then((data) => sendResponse({ ok: true, data }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Could not load scan history." }));
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Could not load scan history." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "clear_scan_history") {
-        saveScanHistory([])
-            .then(() => sendResponse({ ok: true, data: [] }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Could not clear scan history." }));
+        withHistoryLock(async () => {
+            await saveScanHistory([]);
+        })
+            .then(() => {
+                try { sendResponse({ ok: true, data: [] }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Could not clear scan history." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "submit_feedback") {
         submitFeedback(request.payload)
-            .then((data) => sendResponse({ ok: true, data }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Could not submit feedback." }));
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Could not submit feedback." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "retrain_model") {
         retrainModel()
-            .then((data) => sendResponse({ ok: true, data }))
-            .catch((error) => sendResponse({ ok: false, error: error.message || "Could not retrain model." }));
+            .then((data) => {
+                try { sendResponse({ ok: true, data }); } catch (e) {}
+            })
+            .catch((error) => {
+                try { sendResponse({ ok: false, error: error.message || "Could not retrain model." }); } catch (e) {}
+            });
         return true;
     }
 
     if (command === "clear_prediction_cache") {
         predictionCache.clear();
-        sendResponse({ ok: true, data: null });
+        pendingAnalyses.clear();
+        try { sendResponse({ ok: true, data: null }); } catch (e) {}
         return false;
     }
 
