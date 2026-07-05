@@ -117,7 +117,7 @@ def load_resources() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    load_resources()
+    threading.Thread(target=load_resources, daemon=True).start()
     yield
 
 
