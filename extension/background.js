@@ -1,7 +1,7 @@
 const DEFAULT_SETTINGS = {
-    apiBaseUrl: "http://127.0.0.1:8000",
+    apiBaseUrl: "https://avijit070-spam-email-detection.hf.space",
     apiKey: "",
-    requestTimeoutMs: 12000,
+    requestTimeoutMs: 30000,
     autoScanEnabled: true,
     historyLimit: 12
 };
@@ -11,6 +11,9 @@ const CACHE_TTL_MS = 90 * 1000;
 
 chrome.runtime.onInstalled.addListener(async () => {
     const settings = await getSettings();
+    if (settings.apiBaseUrl === "http://127.0.0.1:8000" || settings.apiBaseUrl === "http://localhost:8000") {
+        settings.apiBaseUrl = DEFAULT_SETTINGS.apiBaseUrl;
+    }
     await chrome.storage.sync.set({ settings });
     console.log("Gmail Spam Detector extension installed");
 });
