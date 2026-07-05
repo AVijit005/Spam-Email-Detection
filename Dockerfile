@@ -27,22 +27,8 @@ RUN pip wheel --wheel-dir /wheels --find-links /wheels \
     huggingface-hub transformers xgboost
 
 # Remove duplicate older wheels (keep newest version of each package)
-RUN python3 -c "
-import os, re
-from collections import defaultdict
-files = os.listdir('/wheels')
-pkgs = defaultdict(list)
-for f in files:
-    m = re.match(r'^([a-zA-Z0-9_.]+)-([0-9][a-zA-Z0-9.]*)', f)
-    if m:
-        pkgs[m.group(1)].append((m.group(2), f))
-for name, versions in pkgs.items():
-    if len(versions) > 1:
-        versions.sort()
-        for _, old in versions[:-1]:
-            os.remove(f'/wheels/{old}')
-            print(f'Removed duplicate: {old}')
-"
+COPY scripts/dedup_wheels.py /tmp/dedup_wheels.py
+RUN python3 /tmp/dedup_wheels.py
 
 # =============================================================================
 # Stage 2 — Install from pre-built wheels only (instant, no network)
