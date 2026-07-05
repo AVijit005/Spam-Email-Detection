@@ -12,17 +12,25 @@ const CACHE_MAX_SIZE = 50;
 let historyLock = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener((details) => {
-    getSettings().then(async (settings) => {
+    const init = async () => {
+        const settings = await getSettings();
+        let changed = false;
         const needsMigration = settings.apiBaseUrl === "http://127.0.0.1:8000"
             || settings.apiBaseUrl === "http://localhost:8000"
             || settings.apiBaseUrl === "http://localhost"
             || settings.apiBaseUrl === "http://127.0.0.1";
         if (needsMigration) {
             settings.apiBaseUrl = DEFAULT_SETTINGS.apiBaseUrl;
-            await chrome.storage.sync.set({ settings });
-            console.log("Migrated API URL to HF Space:", DEFAULT_SETTINGS.apiBaseUrl);
+            changed = true;
         }
-    }).catch((error) => {
+        if (details.reason === "install") {
+            changed = true;
+        }
+        if (changed) {
+            await chrome.storage.sync.set({ settings });
+        }
+    };
+    init().catch((error) => {
         console.error("Failed to initialize settings:", error);
     });
 });
@@ -40,6 +48,12 @@ function cacheKey(payload) {
 }
 
 function evictCacheIfNeeded() {
+    const now = Date.now();
+    for (const [key, cached] of predictionCache) {
+        if (now - cached.timestamp > CACHE_TTL_MS) {
+            predictionCache.delete(key);
+        }
+    }
     if (predictionCache.size > CACHE_MAX_SIZE) {
         const oldestKeys = [...predictionCache.keys()].slice(0, predictionCache.size - CACHE_MAX_SIZE);
         oldestKeys.forEach((key) => predictionCache.delete(key));
@@ -124,9 +138,17 @@ async function fetchJson(path, options = {}, settingsOverride = null) {
         });
 
         const contentType = response.headers.get("content-type") || "";
-        const body = contentType.includes("application/json")
-            ? await response.json()
-            : await response.text();
+        let body;
+        try {
+            body = contentType.includes("application/json")
+                ? await response.json()
+                : await response.text();
+        } catch (parseError) {
+            if (parseError instanceof SyntaxError) {
+                throw new Error("Backend returned invalid JSON.");
+            }
+            throw parseError;
+        }
 
         if (!response.ok) {
             const detail = typeof body === "object" && body && "detail" in body
@@ -159,30 +181,42 @@ async function saveScanHistory(history) {
 }
 
 async function pushHistoryEntry(payload, prediction) {
-    const settings = await getSettings();
-    const history = await getScanHistory();
-    const nextEntry = {
-        predictionId: prediction.prediction_id,
-        evaluatedAtUtc: prediction.evaluated_at_utc,
-        label: prediction.label,
-        confidence: prediction.confidence,
-        subject: payload.subject,
-        sender: payload.sender,
-        senderDomain: prediction.sender_domain,
-        reason: prediction.reason,
-        ruleLayer: prediction.rule_layer,
-        userLabel: null,
-        verdict: null
-    };
+    await withHistoryLock(async () => {
+        const settings = await getSettings();
+        const history = await getScanHistory();
+        const nextEntry = {
+            predictionId: prediction.prediction_id,
+            evaluatedAtUtc: prediction.evaluated_at_utc,
+            label: prediction.label,
+            confidence: prediction.confidence,
+            subject: payload.subject,
+            sender: payload.sender,
+            senderDomain: prediction.sender_domain,
+            reason: prediction.reason,
+            ruleLayer: prediction.rule_layer,
+            userLabel: null,
+            verdict: null
+        };
 
-    const filtered = history.filter((entry) => entry.predictionId !== prediction.prediction_id);
-    filtered.unshift(nextEntry);
-    await saveScanHistory(filtered.slice(0, settings.historyLimit));
+        const filtered = history.filter((entry) => entry.predictionId !== prediction.prediction_id);
+        filtered.unshift(nextEntry);
+        await saveScanHistory(filtered.slice(0, settings.historyLimit));
+    });
 }
 
 async function withHistoryLock(fn) {
-    historyLock = historyLock.then(fn).catch(fn);
-    return historyLock;
+    const prev = historyLock;
+    let release;
+    historyLock = new Promise((r) => { release = r; });
+    try {
+        await prev;
+        return await fn();
+    } catch (error) {
+        console.error("History lock operation failed:", error);
+        throw error;
+    } finally {
+        release();
+    }
 }
 
 async function updateHistoryFeedback(predictionId, userLabel, verdict) {
@@ -220,7 +254,13 @@ async function analyzeEmail(payload) {
         value: prediction
     });
     evictCacheIfNeeded();
-    await pushHistoryEntry(normalized, prediction);
+
+    try {
+        await pushHistoryEntry(normalized, prediction);
+    } catch (error) {
+        console.error("Failed to save history entry:", error);
+    }
+
     return prediction;
 }
 
@@ -229,6 +269,9 @@ async function checkBackendHealth() {
 }
 
 async function submitFeedback(payload) {
+    if (!payload || typeof payload !== "object") {
+        throw new Error("Feedback payload is required.");
+    }
     const response = await fetchJson("/v1/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

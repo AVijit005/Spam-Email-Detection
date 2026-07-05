@@ -29,6 +29,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentPayload = null;
     let currentPrediction = null;
+    let confidenceBarTimer = null;
+    let historyLoadCount = 0;
 
     function runtimeMessage(message) {
         return new Promise((resolve, reject) => {
@@ -43,13 +45,18 @@ document.addEventListener("DOMContentLoaded", () => {
                     return;
                 }
 
-                resolve(response.data);
+                resolve(response.data ?? null);
             });
         });
     }
 
     function resetResultState() {
-        elements.resultBox.classList.remove("hidden", "visible", "spam", "safe", "whitelisted", "error");
+        if (confidenceBarTimer) {
+            clearTimeout(confidenceBarTimer);
+            confidenceBarTimer = null;
+        }
+        elements.resultBox.classList.remove("visible", "spam", "safe", "whitelisted", "error");
+        elements.resultBox.classList.add("hidden");
         elements.resultContent.classList.add("hidden");
         elements.loaderContainer.classList.add("hidden");
         elements.resultMeta.classList.add("hidden");
@@ -71,6 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
         elements.btnAnalyze.disabled = isLoading;
         if (isLoading) {
             resetResultState();
+            elements.resultBox.classList.remove("hidden");
             elements.resultBox.classList.add("visible");
             elements.loaderContainer.classList.remove("hidden");
         } else {
@@ -84,14 +92,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function formatDate(isoString) {
-        if (!isoString) {
-            return "";
-        }
-
+        if (!isoString) return "";
         const date = new Date(isoString);
-        if (isNaN(date.getTime())) {
-            return "";
-        }
+        if (isNaN(date.getTime())) return "";
         return date.toLocaleString([], {
             hour: "2-digit",
             minute: "2-digit",
@@ -103,15 +106,20 @@ document.addEventListener("DOMContentLoaded", () => {
     async function refreshBackendStatus() {
         try {
             const health = await runtimeMessage({ command: "check_backend_health" });
+            if (!health || typeof health !== "object") {
+                updateServiceStatus("Backend offline", false);
+                elements.healthMeta.classList.add("hidden");
+                return;
+            }
             const version = health.model_version && health.model_version !== "untrained"
-                ? ` • ${health.model_version}`
+                ? ` \u2022 ${health.model_version}`
                 : "";
             updateServiceStatus(`Backend online${version}`, true);
 
             const metaBits = [
                 health.trained_at_utc ? `Trained ${formatDate(health.trained_at_utc)}` : null,
-                `Feedback ${health.feedback_count}`,
-                `Whitelist ${health.user_whitelist_count}`
+                health.feedback_count != null ? `Feedback ${health.feedback_count}` : null,
+                health.user_whitelist_count != null ? `Whitelist ${health.user_whitelist_count}` : null
             ].filter(Boolean);
 
             elements.healthMeta.innerHTML = "";
@@ -129,23 +137,30 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function parseEmail(text) {
-        const normalized = text.replace(/\r\n/g, "\n");
-        const senderMatch = normalized.match(/^\s*From:\s*(.+)$/im);
-        const subjectMatch = normalized.match(/^\s*Subject:\s*(.+)$/im);
+        const lines = text.replace(/\r\n/g, "\n").split("\n");
+        let sender = "";
+        let subject = "";
+        let bodyStartIndex = 0;
 
-        let body = normalized;
-        if (senderMatch || subjectMatch) {
-            body = normalized
-                .replace(/^\s*From:\s*.+$/im, "")
-                .replace(/^\s*Subject:\s*.+$/im, "")
-                .trim();
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const senderMatch = line.match(/^\s*From:\s*(.+)/i);
+            const subjectMatch = line.match(/^\s*Subject:\s*(.+)/i);
+            if (senderMatch && !sender) {
+                sender = senderMatch[1].trim();
+                bodyStartIndex = i + 1;
+            } else if (subjectMatch && !subject) {
+                subject = subjectMatch[1].trim();
+                bodyStartIndex = i + 1;
+            } else if (line.trim() === "" && bodyStartIndex > 0 && i === bodyStartIndex) {
+                bodyStartIndex = i + 1;
+            } else {
+                break;
+            }
         }
 
-        return {
-            sender: senderMatch ? senderMatch[1].trim() : "",
-            subject: subjectMatch ? subjectMatch[1].trim() : "",
-            body: body.trim()
-        };
+        const body = lines.slice(bodyStartIndex).join("\n").trim();
+        return { sender, subject, body };
     }
 
     function addMetaChip(text) {
@@ -177,13 +192,22 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         elements.feedbackSection.classList.remove("hidden");
+        elements.btnFeedbackCorrect.disabled = false;
+        elements.btnFeedbackSpam.disabled = false;
+        elements.btnFeedbackSafe.disabled = false;
     }
 
     function renderResult(data, payload) {
+        if (!data || typeof data !== "object") {
+            renderError("Invalid response from backend.");
+            return;
+        }
+
         currentPrediction = data;
         currentPayload = payload;
 
         resetResultState();
+        elements.resultBox.classList.remove("hidden");
         elements.resultBox.classList.add("visible");
         elements.resultContent.classList.remove("hidden");
 
@@ -195,7 +219,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const displayLabel = data.label === "whitelisted"
             ? "WHITELISTED"
-            : data.label.toUpperCase();
+            : (data.label || "UNKNOWN").toUpperCase();
 
         elements.resultBox.classList.add(cssClass);
         elements.label.textContent = displayLabel;
@@ -203,24 +227,17 @@ document.addEventListener("DOMContentLoaded", () => {
         elements.reason.textContent = data.reason || "";
         elements.analysis.textContent = data.analysis || "";
 
-        setTimeout(() => {
+        if (confidenceBarTimer) clearTimeout(confidenceBarTimer);
+        confidenceBarTimer = setTimeout(() => {
             elements.confidenceFill.style.width = `${Math.round((data.confidence || 0) * 100)}%`;
         }, 80);
 
-        if (data.rule_layer) {
-            addMetaChip(`Layer: ${data.rule_layer}`);
-        }
-        if (data.model_version) {
-            addMetaChip(data.model_version);
-        }
-        if (data.sender_domain) {
-            addMetaChip(data.sender_domain);
-        }
-        if (data.evaluated_at_utc) {
-            addMetaChip(formatDate(data.evaluated_at_utc));
-        }
-        if (data.signals?.length) {
-            data.signals.slice(0, 3).forEach(addMetaChip);
+        if (data.rule_layer) addMetaChip(`Layer: ${data.rule_layer}`);
+        if (data.model_version) addMetaChip(data.model_version);
+        if (data.sender_domain) addMetaChip(data.sender_domain);
+        if (data.evaluated_at_utc) addMetaChip(formatDate(data.evaluated_at_utc));
+        if (Array.isArray(data.signals) && data.signals.length) {
+            data.signals.slice(0, 3).forEach((s) => addMetaChip(String(s)));
         }
 
         if (elements.resultMeta.childElementCount > 0) {
@@ -235,6 +252,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentPrediction = null;
         currentPayload = null;
         resetResultState();
+        elements.resultBox.classList.remove("hidden");
         elements.resultBox.classList.add("visible", "error");
         elements.resultContent.classList.remove("hidden");
         elements.label.textContent = "ERROR";
@@ -247,28 +265,31 @@ document.addEventListener("DOMContentLoaded", () => {
         return tab;
     }
 
-    async function loadFromGmail() {
-        const tab = await getActiveTab();
-        if (!tab || !tab.id) {
-            alert("Open a Gmail message before using Get from Gmail.");
-            return;
-        }
-        chrome.tabs.sendMessage(tab.id, { command: "get_email_data" }, (response) => {
-            if (chrome.runtime.lastError) {
+    function loadFromGmail() {
+        getActiveTab().then((tab) => {
+            if (!tab || !tab.id) {
                 alert("Open a Gmail message before using Get from Gmail.");
                 return;
             }
-            if (!response || (!response.subject && !response.body)) {
-                alert("No email content detected in the current tab.");
-                return;
-            }
+            chrome.tabs.sendMessage(tab.id, { command: "get_email_data" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    alert("Open a Gmail message before using Get from Gmail.");
+                    return;
+                }
+                if (!response || (!response.subject && !response.body)) {
+                    alert("No email content detected in the current tab. Make sure an email is open.");
+                    return;
+                }
 
-            elements.emailInput.value = [
-                `From: ${response.sender || ""}`,
-                `Subject: ${response.subject || ""}`,
-                "",
-                response.body || ""
-            ].join("\n");
+                elements.emailInput.value = [
+                    response.sender ? `From: ${response.sender}` : "",
+                    response.subject ? `Subject: ${response.subject}` : "",
+                    "",
+                    response.body || ""
+                ].filter((line, i, arr) => !(line === "" && i > 0 && arr[i - 1] === "")).join("\n");
+            });
+        }).catch(() => {
+            alert("Could not access the current tab.");
         });
     }
 
@@ -302,9 +323,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function submitFeedback(userLabel) {
-        if (!currentPrediction || !currentPayload) {
-            return;
-        }
+        if (!currentPrediction || !currentPayload) return;
+
+        elements.btnFeedbackCorrect.disabled = true;
+        elements.btnFeedbackSpam.disabled = true;
+        elements.btnFeedbackSafe.disabled = true;
 
         try {
             const response = await runtimeMessage({
@@ -320,13 +343,17 @@ document.addEventListener("DOMContentLoaded", () => {
                     source: "extension_popup"
                 }
             });
-            elements.feedbackStatus.textContent = `Saved feedback (${String(response.verdict || "ok").replace(/_/g, " ")}).`;
+            elements.feedbackStatus.textContent = `Saved feedback (${String(response?.verdict || "ok").replace(/_/g, " ")}).`;
             elements.feedbackStatus.classList.remove("hidden");
             loadHistory();
             refreshBackendStatus();
         } catch (error) {
             elements.feedbackStatus.textContent = error.message || "Could not save feedback.";
             elements.feedbackStatus.classList.remove("hidden");
+        } finally {
+            elements.btnFeedbackCorrect.disabled = false;
+            elements.btnFeedbackSpam.disabled = false;
+            elements.btnFeedbackSafe.disabled = false;
         }
     }
 
@@ -337,11 +364,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function loadHistory() {
+        const loadId = ++historyLoadCount;
         try {
             const history = await runtimeMessage({ command: "get_scan_history" });
+            if (loadId !== historyLoadCount) return;
+
             elements.historyList.innerHTML = "";
 
-            if (!history.length) {
+            if (!Array.isArray(history) || !history.length) {
                 elements.historyList.innerHTML = "<p class=\"empty-state\">No scans yet.</p>";
                 return;
             }
@@ -359,7 +389,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 const badgeSpan = document.createElement("span");
                 badgeSpan.className = historyBadgeClass(entry.label);
-                badgeSpan.textContent = entry.label;
+                badgeSpan.textContent = entry.label || "Unknown";
 
                 const confidenceSpan = document.createElement("span");
                 confidenceSpan.textContent = `${Math.round((entry.confidence || 0) * 100)}%`;
@@ -378,32 +408,34 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (entry.verdict) {
                     const verdict = document.createElement("div");
                     verdict.className = "history-verdict";
-                    verdict.textContent = `Feedback: ${entry.verdict.replace(/_/g, " ")}`;
+                    verdict.textContent = `Feedback: ${String(entry.verdict).replace(/_/g, " ")}`;
                     item.appendChild(verdict);
                 }
 
                 elements.historyList.appendChild(item);
             });
         } catch (error) {
+            if (loadId !== historyLoadCount) return;
             elements.historyList.innerHTML = "<p class=\"empty-state\">Could not load scan history.</p>";
         }
     }
 
     elements.btnGet.addEventListener("click", loadFromGmail);
     elements.btnAnalyze.addEventListener("click", analyzeCurrentInput);
-    elements.btnSettings.addEventListener("click", () => chrome.runtime.openOptionsPage());
+    elements.btnSettings.addEventListener("click", () => {
+        chrome.runtime.openOptionsPage().catch(() => {});
+    });
     elements.btnClearHistory.addEventListener("click", async () => {
         try {
             await runtimeMessage({ command: "clear_scan_history" });
         } catch (error) {
-            // ignore
+            elements.feedbackStatus.textContent = "Could not clear history.";
+            elements.feedbackStatus.classList.remove("hidden");
         }
         loadHistory();
     });
     elements.btnFeedbackCorrect.addEventListener("click", () => {
-        if (!currentPrediction) {
-            return;
-        }
+        if (!currentPrediction) return;
         submitFeedback(currentPrediction.label === "Spam" ? "Spam" : "Not Spam");
     });
     elements.btnFeedbackSpam.addEventListener("click", () => submitFeedback("Spam"));

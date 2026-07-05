@@ -6,16 +6,24 @@ let analyzeTimer = null;
 let lastSignature = "";
 let analysisInFlight = false;
 let autoScanEnabled = true;
-let forceAnalysis = false;
+let pendingForce = false;
+let feedbackInFlight = false;
+let confidenceBarTimer = null;
 
 function runtimeMessage(message) {
     return new Promise((resolve, reject) => {
+        let settled = false;
         const timer = setTimeout(() => {
-            reject(new Error("Extension message timed out."));
+            if (!settled) {
+                settled = true;
+                reject(new Error("Extension message timed out."));
+            }
         }, MESSAGE_TIMEOUT_MS);
 
         chrome.runtime.sendMessage(message, (response) => {
             clearTimeout(timer);
+            if (settled) return;
+            settled = true;
             if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
                 return;
@@ -38,7 +46,12 @@ async function refreshSettings() {
     }
 }
 
+function readCurrentEmailData() {
+    return window.DomParser?.getEmailData?.() || null;
+}
+
 function emailSignature(data) {
+    if (!data) return "";
     return JSON.stringify([data.sender || "", data.subject || "", data.body || ""]);
 }
 
@@ -56,6 +69,9 @@ async function submitBannerFeedback(payload, prediction, userLabel, statusNode, 
         statusNode.hidden = false;
         return;
     }
+
+    if (feedbackInFlight) return;
+    feedbackInFlight = true;
 
     actionButtons.forEach((button) => {
         button.disabled = true;
@@ -77,12 +93,14 @@ async function submitBannerFeedback(payload, prediction, userLabel, statusNode, 
                 source: "gmail_banner"
             }
         });
-        statusNode.textContent = `Feedback saved (${String(response.verdict || "ok").replace(/_/g, " ")}).`;
+        statusNode.textContent = `Feedback saved (${String(response?.verdict || "ok").replace(/_/g, " ")}).`;
     } catch (error) {
         actionButtons.forEach((button) => {
             button.disabled = false;
         });
         statusNode.textContent = error.message || "Could not save feedback.";
+    } finally {
+        feedbackInFlight = false;
     }
 }
 
@@ -96,6 +114,10 @@ function createFeedbackButton(label, modifierClass, onClick) {
 }
 
 function createBanner(prediction, payload) {
+    if (!prediction || typeof prediction !== "object") {
+        return null;
+    }
+
     const banner = document.createElement("section");
     banner.id = BANNER_ID;
 
@@ -144,14 +166,18 @@ function createBanner(prediction, payload) {
         details.appendChild(analysis);
     }
 
-    const cues = (prediction.explanations?.length ? prediction.explanations : prediction.signals || []).slice(0, 3);
+    const rawCues = prediction.explanations?.length
+        ? prediction.explanations
+        : Array.isArray(prediction.signals) ? prediction.signals : [];
+    const cues = rawCues.slice(0, 3);
     if (cues.length) {
         const signals = document.createElement("div");
         signals.className = "spam-detector-banner__signals";
         cues.forEach((signal) => {
+            if (signal == null) return;
             const chip = document.createElement("span");
             chip.className = "spam-detector-banner__chip";
-            chip.textContent = signal;
+            chip.textContent = String(signal);
             signals.appendChild(chip);
         });
         details.appendChild(signals);
@@ -200,11 +226,11 @@ function createBanner(prediction, payload) {
 
 function injectBanner(prediction, payload) {
     removeBanner();
+    const banner = createBanner(prediction, payload);
+    if (!banner) return;
     const anchor = window.DomParser?.getBannerAnchor?.();
-    if (!anchor) {
-        return;
-    }
-    anchor.insertBefore(createBanner(prediction, payload), anchor.firstChild);
+    if (!anchor) return;
+    anchor.insertBefore(banner, anchor.firstChild);
 }
 
 function injectWarningBanner(message) {
@@ -223,13 +249,8 @@ function injectWarningBanner(message) {
 }
 
 async function analyzeOpenEmail(force = false) {
-    const data = window.DomParser?.getEmailData?.();
+    const data = readCurrentEmailData();
     if (!data || (!data.subject && !data.body)) {
-        return;
-    }
-
-    if (!data.sender && !data.subject && !data.body) {
-        injectWarningBanner("Spam Detector could not read this email \u2014 Gmail may have updated its layout. Try refreshing or pasting into the popup.");
         return;
     }
 
@@ -237,25 +258,27 @@ async function analyzeOpenEmail(force = false) {
         return;
     }
 
-    const signature = emailSignature(data);
-    if (!force && (analysisInFlight || signature === lastSignature)) {
+    const currentSignature = emailSignature(data);
+    if (!force && (analysisInFlight || currentSignature === lastSignature)) {
         return;
     }
 
     analysisInFlight = true;
-    lastSignature = signature;
-    const analysisSignature = signature;
+    lastSignature = currentSignature;
+    const analysisSignature = currentSignature;
 
     try {
         const prediction = await runtimeMessage({
             command: "analyze_email",
             payload: data
         });
-        if (emailSignature(data) === analysisSignature) {
-            injectBanner(prediction, data);
+        const freshData = readCurrentEmailData();
+        if (emailSignature(freshData) === analysisSignature) {
+            injectBanner(prediction, freshData || data);
         }
     } catch (error) {
-        if (emailSignature(data) === analysisSignature) {
+        const freshData = readCurrentEmailData();
+        if (emailSignature(freshData) === analysisSignature) {
             console.warn("Spam detector could not analyze email:", error.message);
         }
     } finally {
@@ -265,17 +288,18 @@ async function analyzeOpenEmail(force = false) {
 
 function scheduleAnalysis(force = false) {
     if (force) {
-        forceAnalysis = true;
+        pendingForce = true;
     }
     clearTimeout(analyzeTimer);
     analyzeTimer = setTimeout(() => {
-        const shouldForce = forceAnalysis;
-        forceAnalysis = false;
+        const shouldForce = pendingForce;
+        pendingForce = false;
         analyzeOpenEmail(shouldForce);
     }, ANALYZE_DEBOUNCE_MS);
 }
 
-if (document.body) {
+function setupObserver() {
+    if (!document.body) return;
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
             if (mutation.addedNodes.length > 0) {
@@ -284,26 +308,29 @@ if (document.body) {
             }
         }
     });
-
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+    observer.observe(document.body, { childList: true, subtree: true });
 }
 
-document.addEventListener("visibilitychange", async () => {
+if (document.body) {
+    setupObserver();
+} else {
+    document.addEventListener("DOMContentLoaded", setupObserver);
+}
+
+document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-        await refreshSettings();
-        scheduleAnalysis(true);
+        refreshSettings().then(() => scheduleAnalysis(true));
     }
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.command === "get_email_data") {
-        sendResponse(window.DomParser?.getEmailData?.() || null);
+    if (request?.command === "get_email_data") {
+        sendResponse(readCurrentEmailData());
     }
 });
 
 refreshSettings().then(() => {
+    scheduleAnalysis(true);
+}).catch(() => {
     scheduleAnalysis(true);
 });
