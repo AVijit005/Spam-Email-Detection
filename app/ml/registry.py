@@ -153,26 +153,43 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
     """Download the HF model from HuggingFace Hub if the local directory is empty.
 
     HF Spaces clones the repo which excludes large model files via .gitignore.
-    This downloads them on first startup.
+    This downloads them on first startup. Also checks the HF cache directory
+    (used by preload_from_hub) as a fallback.
     """
     if (model_dir / "config.json").exists():
         return
 
+    import logging
+    import shutil
+    logger = logging.getLogger(__name__)
+
     repo_id = os.environ.get("HF_MODEL_REPO_ID", "Avijit070/spam-email-deberta-v3")
     hf_token = os.environ.get("HF_TOKEN")
+
+    cache_snapshot = _find_in_hf_cache(repo_id)
+    if cache_snapshot is not None:
+        logger.info("Model found in HF cache at %s — copying to %s", cache_snapshot, model_dir)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        for item in cache_snapshot.iterdir():
+            dest = model_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+        if (model_dir / "config.json").exists():
+            logger.info("Successfully copied model from HF cache.")
+            return
+        logger.warning("HF cache copy incomplete (missing config.json). Downloading...")
 
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "huggingface_hub not installed — cannot download model from HF Hub."
         )
         return
 
-    import logging
     import time
-    logger = logging.getLogger(__name__)
     logger.info("Model files not found locally. Downloading %s from HuggingFace Hub...", repo_id)
 
     max_retries = 3
@@ -184,7 +201,6 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
                 local_dir=str(model_dir),
                 token=hf_token,
             )
-            # Post-download verification
             if (model_dir / "config.json").exists():
                 downloaded = [f.name for f in model_dir.iterdir() if f.is_file()]
                 logger.info("Download complete. Files: %s", downloaded)
@@ -199,7 +215,6 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
                 "Download attempt %d/%d failed: %s", attempt, max_retries, exc,
             )
 
-        # Clean up partial downloads before retry
         if model_dir.exists():
             for f in model_dir.iterdir():
                 if f.is_file():
@@ -211,3 +226,36 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
             time.sleep(wait)
 
     logger.warning("All download attempts failed. Running XGBoost-only.")
+
+
+def _find_in_hf_cache(repo_id: str) -> Path | None:
+    """Find model files inside the HF Hub cache directory.
+
+    preload_from_hub downloads models to ~/.cache/huggingface/hub during
+    Docker build. This function checks that cache as a fallback when the
+    model is not in the expected local directory.
+    """
+    cache_base = os.environ.get("HF_HOME") or os.environ.get(
+        "TRANSFORMERS_CACHE"
+    ) or os.environ.get("XDG_CACHE_HOME")
+
+    if cache_base:
+        cache_dir = Path(cache_base)
+        if not cache_dir.name == "hub":
+            cache_dir = cache_dir / "hub"
+    else:
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+
+    model_cache = cache_dir / ("models--" + repo_id.replace("/", "--"))
+    if not model_cache.is_dir():
+        return None
+
+    snapshots_dir = model_cache / "snapshots"
+    if not snapshots_dir.is_dir():
+        return None
+
+    for snapshot in sorted(snapshots_dir.iterdir()):
+        if snapshot.is_dir() and (snapshot / "config.json").exists():
+            return snapshot
+
+    return None

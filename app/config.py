@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SPAM_", env_file=".env", env_file_encoding="utf-8")
 
     api_host: str = "0.0.0.0"
-    api_port: int = int(os.environ.get("PORT", "8000"))
+    api_port: int = int(os.environ.get("PORT", "7860"))
     log_level: str = "info"
 
     allow_origin_regex: str = (

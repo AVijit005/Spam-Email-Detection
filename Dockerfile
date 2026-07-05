@@ -1,33 +1,4 @@
-# =============================================================================
-# Stage 1 — Build all wheels with network
-# =============================================================================
-FROM python:3.11-slim AS builder
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip wheel --wheel-dir /wheels \
-    torch --index-url https://download.pytorch.org/whl/cpu
-
-RUN pip wheel --wheel-dir /wheels --find-links /wheels \
-    fastapi uvicorn gunicorn \
-    scikit-learn pandas numpy scipy \
-    joblib nltk psutil tqdm httpx PyMySQL \
-    pydantic-settings slowapi safetensors \
-    huggingface-hub transformers xgboost
-
-COPY scripts/dedup_wheels.py /tmp/dedup_wheels.py
-RUN python3 /tmp/dedup_wheels.py
-
-# =============================================================================
-# Stage 2 — Runtime
-# =============================================================================
+# Spam Email Detection — HF Spaces Docker Image
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -37,22 +8,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --shell /bin/bash appuser
+RUN useradd --create-home --shell /bin/bash user
 
 WORKDIR /app
 
-COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+COPY --chown=user:user requirements-hf.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-hf.txt
 
-COPY . /app
+COPY --chown=user:user . /app
+
 RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
-    chown -R appuser:appuser /app/data /app/model
+    chown -R user:user /app/data /app/model
 
-USER appuser
+USER user
+
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
-    CMD python -c "import os; from urllib.request import urlopen; urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/v1/health')" || exit 1
+    CMD python -c "import os; from urllib.request import urlopen; urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"7860\")}/v1/health')" || exit 1
 
-CMD ["sh", "-c", "exec gunicorn app.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
+CMD ["sh", "-c", "exec gunicorn app.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-7860} --timeout 120"]
