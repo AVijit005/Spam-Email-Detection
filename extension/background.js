@@ -12,17 +12,19 @@ const CACHE_MAX_SIZE = 50;
 let historyLock = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener((details) => {
-    if (details.reason === "install") {
-        getSettings().then(async (settings) => {
-            if (settings.apiBaseUrl === "http://127.0.0.1:8000" || settings.apiBaseUrl === "http://localhost:8000") {
-                settings.apiBaseUrl = DEFAULT_SETTINGS.apiBaseUrl;
-            }
+    getSettings().then(async (settings) => {
+        const needsMigration = settings.apiBaseUrl === "http://127.0.0.1:8000"
+            || settings.apiBaseUrl === "http://localhost:8000"
+            || settings.apiBaseUrl === "http://localhost"
+            || settings.apiBaseUrl === "http://127.0.0.1";
+        if (needsMigration) {
+            settings.apiBaseUrl = DEFAULT_SETTINGS.apiBaseUrl;
             await chrome.storage.sync.set({ settings });
-            console.log("Gmail Spam Detector extension installed");
-        }).catch((error) => {
-            console.error("Failed to initialize settings:", error);
-        });
-    }
+            console.log("Migrated API URL to HF Space:", DEFAULT_SETTINGS.apiBaseUrl);
+        }
+    }).catch((error) => {
+        console.error("Failed to initialize settings:", error);
+    });
 });
 
 function normalizePayload(payload = {}) {
