@@ -70,12 +70,11 @@ document.addEventListener("DOMContentLoaded", () => {
         elements.btnGet.disabled = isLoading;
         elements.btnAnalyze.disabled = isLoading;
         resetResultState();
-        elements.resultBox.classList.add("visible");
         if (isLoading) {
+            elements.resultBox.classList.add("visible");
             elements.loaderContainer.classList.remove("hidden");
         } else {
             elements.loaderContainer.classList.add("hidden");
-            elements.resultContent.classList.remove("hidden");
         }
     }
 
@@ -90,6 +89,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const date = new Date(isoString);
+        if (isNaN(date.getTime())) {
+            return "";
+        }
         return date.toLocaleString([], {
             hour: "2-digit",
             minute: "2-digit",
@@ -104,7 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const version = health.model_version && health.model_version !== "untrained"
                 ? ` • ${health.model_version}`
                 : "";
-            updateServiceStatus(`Backend online${version}`, Boolean(health.model_loaded));
+            updateServiceStatus(`Backend online${version}`, true);
 
             const metaBits = [
                 health.trained_at_utc ? `Trained ${formatDate(health.trained_at_utc)}` : null,
@@ -247,6 +249,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadFromGmail() {
         const tab = await getActiveTab();
+        if (!tab || !tab.id) {
+            alert("Open a Gmail message before using Get from Gmail.");
+            return;
+        }
         chrome.tabs.sendMessage(tab.id, { command: "get_email_data" }, (response) => {
             if (chrome.runtime.lastError) {
                 alert("Open a Gmail message before using Get from Gmail.");
@@ -269,6 +275,9 @@ document.addEventListener("DOMContentLoaded", () => {
     async function analyzeCurrentInput() {
         const emailText = elements.emailInput.value.trim();
         if (!emailText) {
+            currentPrediction = null;
+            currentPayload = null;
+            resetResultState();
             alert("Paste email content or load it from Gmail first.");
             return;
         }
@@ -287,6 +296,8 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) {
             renderError(error.message || "Could not connect to the backend.");
             updateServiceStatus("Backend offline", false);
+        } finally {
+            setLoadingState(false);
         }
     }
 
@@ -309,7 +320,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     source: "extension_popup"
                 }
             });
-            elements.feedbackStatus.textContent = `Saved feedback (${response.verdict.replace("_", " ")}).`;
+            elements.feedbackStatus.textContent = `Saved feedback (${String(response.verdict || "ok").replace(/_/g, " ")}).`;
             elements.feedbackStatus.classList.remove("hidden");
             loadHistory();
             refreshBackendStatus();
@@ -320,7 +331,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function historyBadgeClass(label) {
-        return label === "Spam" ? "history-badge spam" : "history-badge safe";
+        if (label === "Spam") return "history-badge spam";
+        if (label === "whitelisted") return "history-badge whitelisted";
+        return "history-badge safe";
     }
 
     async function loadHistory() {
@@ -343,11 +356,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 const meta = document.createElement("div");
                 meta.className = "history-meta-row";
-                meta.innerHTML = `
-                    <span class="${historyBadgeClass(entry.label)}">${entry.label}</span>
-                    <span>${Math.round((entry.confidence || 0) * 100)}%</span>
-                    <span>${formatDate(entry.evaluatedAtUtc)}</span>
-                `;
+
+                const badgeSpan = document.createElement("span");
+                badgeSpan.className = historyBadgeClass(entry.label);
+                badgeSpan.textContent = entry.label;
+
+                const confidenceSpan = document.createElement("span");
+                confidenceSpan.textContent = `${Math.round((entry.confidence || 0) * 100)}%`;
+
+                const dateSpan = document.createElement("span");
+                dateSpan.textContent = formatDate(entry.evaluatedAtUtc);
+
+                meta.append(badgeSpan, confidenceSpan, dateSpan);
 
                 const sender = document.createElement("div");
                 sender.className = "history-sender";
@@ -358,7 +378,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (entry.verdict) {
                     const verdict = document.createElement("div");
                     verdict.className = "history-verdict";
-                    verdict.textContent = `Feedback: ${entry.verdict.replace("_", " ")}`;
+                    verdict.textContent = `Feedback: ${entry.verdict.replace(/_/g, " ")}`;
                     item.appendChild(verdict);
                 }
 
@@ -373,7 +393,11 @@ document.addEventListener("DOMContentLoaded", () => {
     elements.btnAnalyze.addEventListener("click", analyzeCurrentInput);
     elements.btnSettings.addEventListener("click", () => chrome.runtime.openOptionsPage());
     elements.btnClearHistory.addEventListener("click", async () => {
-        await runtimeMessage({ command: "clear_scan_history" });
+        try {
+            await runtimeMessage({ command: "clear_scan_history" });
+        } catch (error) {
+            // ignore
+        }
         loadHistory();
     });
     elements.btnFeedbackCorrect.addEventListener("click", () => {
@@ -387,7 +411,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     elements.emailInput.addEventListener("keydown", (event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-            analyzeCurrentInput();
+            event.preventDefault();
+            if (!elements.btnAnalyze.disabled) {
+                analyzeCurrentInput();
+            }
         }
     });
 

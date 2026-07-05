@@ -1,18 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Gmail Spam Detector",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Detect spam and phishing emails in Gmail using a local or deployed FastAPI backend.",
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
   "permissions": [
     "activeTab",
     "storage"
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*",
-    "https://localhost/*",
-    "https://127.0.0.1/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "https://localhost:8000/*",
+    "https://127.0.0.1:8000/*",
     "https://*.hf.space/*"
   ],
   "optional_host_permissions": [
@@ -26,7 +31,10 @@
       "128": "assets/icon128.png"
     }
   },
-  "options_page": "options.html",
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "background.js"
   },
@@ -41,16 +49,6 @@
       ],
       "css": [
         "content.css"
-      ]
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "assets/*"
-      ],
-      "matches": [
-        "https://mail.google.com/*"
       ]
     }
   ]

@@ -1,14 +1,21 @@
 const BANNER_ID = "spam-detector-banner";
 const ANALYZE_DEBOUNCE_MS = 900;
+const MESSAGE_TIMEOUT_MS = 30000;
 
 let analyzeTimer = null;
 let lastSignature = "";
 let analysisInFlight = false;
 let autoScanEnabled = true;
+let forceAnalysis = false;
 
 function runtimeMessage(message) {
     return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error("Extension message timed out."));
+        }, MESSAGE_TIMEOUT_MS);
+
         chrome.runtime.sendMessage(message, (response) => {
+            clearTimeout(timer);
             if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
                 return;
@@ -70,7 +77,7 @@ async function submitBannerFeedback(payload, prediction, userLabel, statusNode, 
                 source: "gmail_banner"
             }
         });
-        statusNode.textContent = `Feedback saved (${String(response.verdict || "ok").replace("_", " ")}).`;
+        statusNode.textContent = `Feedback saved (${String(response.verdict || "ok").replace(/_/g, " ")}).`;
     } catch (error) {
         actionButtons.forEach((button) => {
             button.disabled = false;
@@ -183,7 +190,8 @@ function createBanner(prediction, payload) {
     details.appendChild(feedbackSection);
     banner.appendChild(details);
 
-    header.addEventListener("click", () => {
+    header.addEventListener("click", (event) => {
+        event.stopPropagation();
         banner.classList.toggle("spam-detector-banner--expanded");
     });
 
@@ -221,7 +229,7 @@ async function analyzeOpenEmail(force = false) {
     }
 
     if (!data.sender && !data.subject && !data.body) {
-        injectWarningBanner("Spam Detector could not read this email — Gmail may have updated its layout. Try refreshing or pasting into the popup.");
+        injectWarningBanner("Spam Detector could not read this email \u2014 Gmail may have updated its layout. Try refreshing or pasting into the popup.");
         return;
     }
 
@@ -236,39 +244,52 @@ async function analyzeOpenEmail(force = false) {
 
     analysisInFlight = true;
     lastSignature = signature;
+    const analysisSignature = signature;
 
     try {
         const prediction = await runtimeMessage({
             command: "analyze_email",
             payload: data
         });
-        injectBanner(prediction, data);
+        if (emailSignature(data) === analysisSignature) {
+            injectBanner(prediction, data);
+        }
     } catch (error) {
-        lastSignature = "";
-        console.warn("Spam detector could not analyze email:", error.message);
+        if (emailSignature(data) === analysisSignature) {
+            console.warn("Spam detector could not analyze email:", error.message);
+        }
     } finally {
         analysisInFlight = false;
     }
 }
 
 function scheduleAnalysis(force = false) {
+    if (force) {
+        forceAnalysis = true;
+    }
     clearTimeout(analyzeTimer);
-    analyzeTimer = setTimeout(() => analyzeOpenEmail(force), ANALYZE_DEBOUNCE_MS);
+    analyzeTimer = setTimeout(() => {
+        const shouldForce = forceAnalysis;
+        forceAnalysis = false;
+        analyzeOpenEmail(shouldForce);
+    }, ANALYZE_DEBOUNCE_MS);
 }
 
-const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-        if (mutation.addedNodes.length > 0) {
-            scheduleAnalysis(false);
-            break;
+if (document.body) {
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            if (mutation.addedNodes.length > 0) {
+                scheduleAnalysis(false);
+                break;
+            }
         }
-    }
-});
+    });
 
-observer.observe(document.body, {
-    childList: true,
-    subtree: true
-});
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+}
 
 document.addEventListener("visibilitychange", async () => {
     if (!document.hidden) {

@@ -45,8 +45,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                 command: "save_settings",
                 payload: {
                     apiBaseUrl: elements.apiBaseUrl.value,
-                    requestTimeoutMs: Number(elements.requestTimeout.value),
-                    historyLimit: Number(elements.historyLimit.value),
+                    requestTimeoutMs: Number(elements.requestTimeout.value) || 30000,
+                    historyLimit: Number(elements.historyLimit.value) || 12,
                     autoScanEnabled: elements.autoScanEnabled.checked
                 }
             });
@@ -58,23 +58,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     elements.btnCheck.addEventListener("click", async () => {
+        elements.btnCheck.disabled = true;
         try {
             const health = await runtimeMessage({ command: "check_backend_health" });
-            setStatus(`Backend online (${health.feedback_backend}). Model: ${health.model_version}. /v1/health OK`);
+            const backend = health.feedback_backend || "unknown";
+            const model = health.model_version || "unknown";
+            setStatus(`Backend online (${backend}). Model: ${model}. /v1/health OK`);
         } catch (error) {
             setStatus(error.message || "Backend is unavailable.");
+        } finally {
+            elements.btnCheck.disabled = false;
         }
     });
 
     elements.btnRetrain.addEventListener("click", async () => {
+        elements.btnRetrain.disabled = true;
         try {
             setStatus("Retraining model from reviewed feedback. This can take a few minutes...");
             const result = await runtimeMessage({ command: "retrain_model" });
-            setStatus(
-                `Retrained ${result.model_version} via ${result.feedback_backend}. Feedback used: ${result.feedback_rows_used}.`
-            );
+            const version = result.model_version || "unknown";
+            const backend = result.feedback_backend || "unknown";
+            const used = result.feedback_rows_used ?? 0;
+            setStatus(`Retrained ${version} via ${backend}. Feedback used: ${used}.`);
         } catch (error) {
             setStatus(error.message || "Could not retrain model.");
+        } finally {
+            elements.btnRetrain.disabled = false;
         }
     });
 

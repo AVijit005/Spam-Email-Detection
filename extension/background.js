@@ -8,14 +8,21 @@ const DEFAULT_SETTINGS = {
 
 const predictionCache = new Map();
 const CACHE_TTL_MS = 90 * 1000;
+const CACHE_MAX_SIZE = 50;
+let historyLock = Promise.resolve();
 
-chrome.runtime.onInstalled.addListener(async () => {
-    const settings = await getSettings();
-    if (settings.apiBaseUrl === "http://127.0.0.1:8000" || settings.apiBaseUrl === "http://localhost:8000") {
-        settings.apiBaseUrl = DEFAULT_SETTINGS.apiBaseUrl;
+chrome.runtime.onInstalled.addListener((details) => {
+    if (details.reason === "install") {
+        getSettings().then(async (settings) => {
+            if (settings.apiBaseUrl === "http://127.0.0.1:8000" || settings.apiBaseUrl === "http://localhost:8000") {
+                settings.apiBaseUrl = DEFAULT_SETTINGS.apiBaseUrl;
+            }
+            await chrome.storage.sync.set({ settings });
+            console.log("Gmail Spam Detector extension installed");
+        }).catch((error) => {
+            console.error("Failed to initialize settings:", error);
+        });
     }
-    await chrome.storage.sync.set({ settings });
-    console.log("Gmail Spam Detector extension installed");
 });
 
 function normalizePayload(payload = {}) {
@@ -28,6 +35,13 @@ function normalizePayload(payload = {}) {
 
 function cacheKey(payload) {
     return JSON.stringify([payload.sender, payload.subject, payload.body]);
+}
+
+function evictCacheIfNeeded() {
+    if (predictionCache.size > CACHE_MAX_SIZE) {
+        const oldestKeys = [...predictionCache.keys()].slice(0, predictionCache.size - CACHE_MAX_SIZE);
+        oldestKeys.forEach((key) => predictionCache.delete(key));
+    }
 }
 
 function getCachedPrediction(key) {
@@ -56,17 +70,21 @@ async function getSettings() {
 function normalizeApiBaseUrl(url) {
     const value = String(url || "").trim().replace(/\/+$/, "");
     const normalized = value || DEFAULT_SETTINGS.apiBaseUrl;
-    const parsed = new URL(normalized);
-
-    if (parsed.protocol === "https:") {
-        return parsed.origin;
+    try {
+        const parsed = new URL(normalized);
+        if (parsed.protocol === "https:") {
+            return parsed.origin;
+        }
+        if (parsed.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
+            return parsed.origin;
+        }
+        throw new Error("Use http:// only for localhost, or https:// for deployed backends.");
+    } catch (error) {
+        if (error.message.includes("Use http")) {
+            throw error;
+        }
+        throw new Error("Please enter a valid URL (e.g., https://example.com)");
     }
-
-    if (parsed.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
-        return parsed.origin;
-    }
-
-    throw new Error("Use http:// only for localhost, or https:// for deployed backends.");
 }
 
 async function saveSettings(partialSettings = {}) {
@@ -120,6 +138,9 @@ async function fetchJson(path, options = {}, settingsOverride = null) {
         if (error.name === "AbortError") {
             throw new Error("Backend request timed out. Check that the FastAPI server is running.");
         }
+        if (error instanceof TypeError) {
+            throw new Error(`Could not connect to backend at ${settings.apiBaseUrl}. Check your network and server status.`);
+        }
         throw error;
     } finally {
         clearTimeout(timeoutId);
@@ -157,14 +178,21 @@ async function pushHistoryEntry(payload, prediction) {
     await saveScanHistory(filtered.slice(0, settings.historyLimit));
 }
 
+async function withHistoryLock(fn) {
+    historyLock = historyLock.then(fn).catch(fn);
+    return historyLock;
+}
+
 async function updateHistoryFeedback(predictionId, userLabel, verdict) {
-    const history = await getScanHistory();
-    const updated = history.map((entry) => (
-        entry.predictionId === predictionId
-            ? { ...entry, userLabel, verdict }
-            : entry
-    ));
-    await saveScanHistory(updated);
+    await withHistoryLock(async () => {
+        const history = await getScanHistory();
+        const updated = history.map((entry) => (
+            entry.predictionId === predictionId
+                ? { ...entry, userLabel, verdict }
+                : entry
+        ));
+        await saveScanHistory(updated);
+    });
 }
 
 async function analyzeEmail(payload) {
@@ -189,6 +217,7 @@ async function analyzeEmail(payload) {
         timestamp: Date.now(),
         value: prediction
     });
+    evictCacheIfNeeded();
     await pushHistoryEntry(normalized, prediction);
     return prediction;
 }
@@ -203,7 +232,8 @@ async function submitFeedback(payload) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
     });
-    await updateHistoryFeedback(payload.prediction_id, payload.user_label, response.verdict);
+    const verdict = response.verdict || "ok";
+    await updateHistoryFeedback(payload.prediction_id, payload.user_label, verdict);
     return response;
 }
 
@@ -211,7 +241,8 @@ async function retrainModel() {
     const settings = await getSettings();
     const response = await fetchJson("/v1/retrain", {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
     }, {
         ...settings,
         requestTimeoutMs: Math.max(settings.requestTimeoutMs, 15 * 60 * 1000)
@@ -284,7 +315,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (command === "clear_prediction_cache") {
         predictionCache.clear();
-        sendResponse({ ok: true });
+        sendResponse({ ok: true, data: null });
         return false;
     }
 
