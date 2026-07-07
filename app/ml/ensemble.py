@@ -76,13 +76,22 @@ class EnsemblePredictor:
         p_classical = self.classical_model.predict_proba(features)
         if not self.has_transformer:
             return p_classical
-        p_transformer = self._transformer_proba(raw_texts)
-        p_spam = (
-            self.fusion_weight * p_classical[:, 1]
-            + (1 - self.fusion_weight) * p_transformer[:, 1]
-        )
-        p_ham = 1.0 - p_spam
-        return np.column_stack([p_ham, p_spam])
+        try:
+            p_transformer = self._transformer_proba(raw_texts)
+            p_spam = (
+                self.fusion_weight * p_classical[:, 1]
+                + (1 - self.fusion_weight) * p_transformer[:, 1]
+            )
+            p_ham = 1.0 - p_spam
+            return np.column_stack([p_ham, p_spam])
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Transformer inference failed (%s) — falling back to classical-only.", exc,
+            )
+            self.transformer_model = None
+            self.transformer_tokenizer = None
+            return p_classical
 
     def predict(self, features: sp.csr_matrix, raw_texts: list[str], threshold: float = 0.55) -> np.ndarray:
         return (self.predict_proba(features, raw_texts)[:, 1] >= threshold).astype(np.int32)
