@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     transformer_model_dir: Path = MODEL_DIR / "hf_model"
     transformer_model_name: str = "microsoft/deberta-v3-base"
     transformer_device: str = "cpu"
+    hf_model_repo_id: str = "Avijit070/spam-email-deberta-v3"
 
 
 settings = Settings()

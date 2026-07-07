@@ -183,7 +183,8 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
     if (model_dir / "config.json").exists():
         return
 
-    repo_id = os.environ.get("HF_MODEL_REPO_ID", "pavitra55/spam-email-deberta-v3")
+    from app.config import settings
+    repo_id = os.environ.get("HF_MODEL_REPO_ID", settings.hf_model_repo_id)
 
     try:
         from huggingface_hub import snapshot_download
@@ -207,8 +208,5 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
         logger.info("Download complete. Model cached at %s", model_dir)
     except Exception as exc:
         logger.warning(
-            "Failed to download model from HF Hub: %s. Running XGBoost-only.", exc
+            "Failed to download model from HF Hub: %s. Trying .pt fallback.", exc
         )
-        if model_dir.exists():
-            for f in model_dir.iterdir():
-                f.unlink(missing_ok=True)
