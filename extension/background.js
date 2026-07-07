@@ -1,7 +1,7 @@
 const DEFAULT_SETTINGS = {
     apiBaseUrl: "https://avijit070-spam-detection-system.hf.space",
     apiKey: "",
-    requestTimeoutMs: 12000,
+    requestTimeoutMs: 30000,
     autoScanEnabled: true,
     historyLimit: 12
 };
