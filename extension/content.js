@@ -5,6 +5,59 @@ let analyzeTimer = null;
 let lastSignature = "";
 let analysisInFlight = false;
 let autoScanEnabled = true;
+let cachedSettings = null;
+
+async function getSettingsDirect() {
+    if (cachedSettings) return cachedSettings;
+    return new Promise((resolve) => {
+        chrome.storage.sync.get("settings", (data) => {
+            const stored = data.settings || {};
+            cachedSettings = {
+                apiBaseUrl: stored.apiBaseUrl || "https://avijit070-spam-detection-system.hf.space",
+                apiKey: stored.apiKey || "",
+                requestTimeoutMs: Math.max(25000, Number(stored.requestTimeoutMs) || 30000),
+                autoScanEnabled: Boolean(stored.autoScanEnabled !== undefined ? stored.autoScanEnabled : true)
+            };
+            resolve(cachedSettings);
+        });
+    });
+}
+
+async function directFetch(path, options = {}) {
+    const settings = await getSettingsDirect();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), settings.requestTimeoutMs);
+
+    const headers = { ...(options.headers || {}) };
+    if (settings.apiKey) {
+        headers["X-API-Key"] = settings.apiKey;
+    }
+
+    try {
+        const response = await fetch(`${settings.apiBaseUrl}${path}`, {
+            ...options,
+            headers,
+            signal: controller.signal
+        });
+        const contentType = response.headers.get("content-type") || "";
+        const body = contentType.includes("application/json")
+            ? await response.json()
+            : await response.text();
+        if (!response.ok) {
+            const detail = typeof body === "object" && body && "detail" in body
+                ? body.detail : body || `Request failed with status ${response.status}`;
+            throw new Error(String(detail));
+        }
+        return body;
+    } catch (error) {
+        if (error.name === "AbortError") {
+            throw new Error("Backend request timed out. Check that the FastAPI server is running.");
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 
 function runtimeMessage(message) {
     return new Promise((resolve, reject) => {
@@ -22,10 +75,19 @@ function runtimeMessage(message) {
     });
 }
 
+function normalizePayload(payload) {
+    return {
+        sender: String(payload.sender || "").trim(),
+        subject: String(payload.subject || "").trim(),
+        body: String(payload.body || "").trim()
+    };
+}
+
 async function refreshSettings() {
     try {
-        const settings = await runtimeMessage({ command: "get_settings" });
-        autoScanEnabled = Boolean(settings.autoScanEnabled);
+        cachedSettings = null;
+        const settings = await getSettingsDirect();
+        autoScanEnabled = settings.autoScanEnabled;
     } catch (error) {
         autoScanEnabled = true;
     }
@@ -57,9 +119,10 @@ async function submitBannerFeedback(payload, prediction, userLabel, statusNode, 
     statusNode.textContent = "Saving feedback...";
 
     try {
-        const response = await runtimeMessage({
-            command: "submit_feedback",
-            payload: {
+        const response = await directFetch("/v1/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
                 prediction_id: prediction.prediction_id,
                 sender: payload.sender || "",
                 subject: payload.subject || "",
@@ -68,7 +131,7 @@ async function submitBannerFeedback(payload, prediction, userLabel, statusNode, 
                 predicted_confidence: prediction.confidence,
                 user_label: userLabel,
                 source: "gmail_banner"
-            }
+            })
         });
         statusNode.textContent = `Feedback saved (${String(response.verdict || "ok").replace("_", " ")}).`;
     } catch (error) {
@@ -206,6 +269,21 @@ function injectWarningBanner(message) {
     }
 }
 
+function injectLoadingBanner() {
+    removeBanner();
+    const banner = document.createElement("section");
+    banner.id = BANNER_ID;
+    banner.className = "spam-detector-banner spam-detector-banner--safe";
+    const text = document.createElement("p");
+    text.className = "spam-detector-banner__reason";
+    text.textContent = "Analyzing this email...";
+    banner.appendChild(text);
+    const anchor = window.DomParser?.getBannerAnchor?.();
+    if (anchor) {
+        anchor.insertBefore(banner, anchor.firstChild);
+    }
+}
+
 let retryCount = 0;
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 1500;
@@ -238,10 +316,14 @@ async function analyzeOpenEmail(force = false) {
     analysisInFlight = true;
     lastSignature = signature;
 
+    injectLoadingBanner();
+
     try {
-        const prediction = await runtimeMessage({
-            command: "analyze_email",
-            payload: data
+        const normalized = normalizePayload(data);
+        const prediction = await directFetch("/v1/predict", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(normalized)
         });
         injectBanner(prediction, data);
     } catch (error) {
