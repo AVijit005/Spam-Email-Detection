@@ -84,8 +84,8 @@ class EnsemblePredictor:
         p_ham = 1.0 - p_spam
         return np.column_stack([p_ham, p_spam])
 
-    def predict(self, features: sp.csr_matrix, raw_texts: list[str]) -> np.ndarray:
-        return (self.predict_proba(features, raw_texts)[:, 1] >= 0.55).astype(np.int32)
+    def predict(self, features: sp.csr_matrix, raw_texts: list[str], threshold: float = 0.55) -> np.ndarray:
+        return (self.predict_proba(features, raw_texts)[:, 1] >= threshold).astype(np.int32)
 
 
 def grid_search_fusion_weight(
@@ -93,14 +93,15 @@ def grid_search_fusion_weight(
     transformer_probs: np.ndarray,
     y_true: np.ndarray,
     n_steps: int = 21,
+    threshold: float = 0.55,
 ) -> dict[str, Any]:
+    from sklearn.metrics import f1_score
     best_f1 = 0.0
     best_weight = 0.50
     results = []
     for w in np.linspace(0.0, 1.0, n_steps):
         fused = w * classical_probs[:, 1] + (1 - w) * transformer_probs[:, 1]
-        from sklearn.metrics import f1_score
-        f1 = f1_score(y_true, fused >= 0.55, pos_label=1)
+        f1 = f1_score(y_true, fused >= threshold, pos_label=1)
         results.append((w, f1))
         if f1 > best_f1:
             best_f1 = f1

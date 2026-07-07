@@ -42,6 +42,17 @@ def load_resources() -> None:
 
     if model is None or vectorizer is None:
         logger.warning("Model or vectorizer not found at startup. Predict will return 500.")
+        if settings.bootstrap_model_if_missing and settings.train_script_path.exists():
+            logger.info("Bootstrap enabled — triggering initial training...")
+            import subprocess
+            import sys as _sys
+            subprocess.Popen(
+                [_sys.executable, str(settings.train_script_path)],
+                cwd=str(settings.train_script_path.parent.parent),
+            )
+
+    if not settings.api_key:
+        logger.warning("SPAM_API_KEY not set — authenticated endpoints (feedback, retrain) are unprotected.")
 
     health_mod.model = model
     health_mod.vectorizer = vectorizer
@@ -88,12 +99,14 @@ app = create_app()
 
 if __name__ == "__main__":
     import signal
+    import sys
     import uvicorn
 
     def _shutdown_handler(signum, frame):
         logger.info("Received shutdown signal %s, stopping...", signum)
 
-    signal.signal(signal.SIGTERM, _shutdown_handler)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
 
     uvicorn.run(app, host=settings.api_host, port=settings.api_port, log_level=settings.log_level)

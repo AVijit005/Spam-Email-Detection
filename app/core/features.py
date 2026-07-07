@@ -34,9 +34,8 @@ from app.core.constants import (
 
 
 def _count_keyword_hits(text: str, keywords: Iterable[str]) -> int:
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
-    keyword_set = set(keywords)
-    return sum(1 for token in tokens if token in keyword_set)
+    lowered = text.lower()
+    return sum(1 for keyword in keywords if keyword in lowered)
 
 
 def _count_phrase_hits(text: str, phrases: Iterable[str]) -> int:

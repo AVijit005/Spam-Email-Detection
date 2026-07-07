@@ -12,9 +12,15 @@ __pycache__
 dist/
 *.log
 *.sha256
+data/spam.csv
 data/feedback.jsonl
-model/*.pkl
-model/model_metadata.json
+model/checkpoints/
+model/train_*.py
+model/shared.py
+model/__pycache__/
+tests/
+docs/
+extension/
 node_modules
 .vscode
 .idea

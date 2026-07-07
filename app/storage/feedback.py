@@ -36,9 +36,12 @@ def _env_first(*names: str, default: str = "") -> str:
     return default
 
 
-def resolve_feedback_store(log_path: str | Path) -> FeedbackStoreConfig:
+def resolve_feedback_store(log_path: str | Path, backend_override: str | None = None) -> FeedbackStoreConfig:
     path = Path(log_path)
-    mode = _env_first("SPAM_FEEDBACK_BACKEND", default="auto").strip().lower() or "auto"
+    if backend_override and backend_override.strip():
+        mode = backend_override.strip().lower()
+    else:
+        mode = _env_first("SPAM_FEEDBACK_BACKEND", default="auto").strip().lower() or "auto"
     host = _env_first("SPAM_DB_HOST", "MYSQL_HOST")
     port_text = _env_first("SPAM_DB_PORT", "MYSQL_PORT", default="3306")
     user = _env_first("SPAM_DB_USER", "MYSQL_USER")

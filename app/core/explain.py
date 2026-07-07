@@ -26,10 +26,14 @@ def explain_prediction(model: Any, features: sp.csr_matrix, feature_names: list[
     active_indices = features.indices
     active_values = features.data
 
-    if hasattr(model, "coef_"):
-        coefficients = np.asarray(model.coef_[0]).ravel()
-    elif hasattr(model, "feature_importances_"):
-        coefficients = model.feature_importances_
+    inner = model
+    if hasattr(model, "classical_model"):
+        inner = model.classical_model
+
+    if hasattr(inner, "coef_"):
+        coefficients = np.asarray(inner.coef_[0]).ravel()
+    elif hasattr(inner, "feature_importances_"):
+        coefficients = inner.feature_importances_
     else:
         return []
 

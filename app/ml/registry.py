@@ -70,7 +70,8 @@ def load_model(
         with open(vectorizer_path, "rb") as f:
             vectorizer = pickle.load(f)
     elif vectorizer_path.is_dir():
-        vectorizer = str(vectorizer_path)
+        vectorizer = {"version": 1, "word_vec": None, "model_type": "transformer",
+                      "char_vectorizer": None, "meta_feature_names": []}
 
     metadata: dict[str, Any] = {}
     if metadata_path.exists():

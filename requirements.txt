@@ -33,21 +33,12 @@ slowapi>=0.1.9
 safetensors>=0.4.0
 
 # --------------------------------------------------
-# Track B — Transformers (Kaggle / GPU)
+# Track B — Transformers (inference)
 # --------------------------------------------------
 torch>=2.2.0
 transformers>=4.38.0
-accelerate>=0.27.0
-datasets>=2.18.0
-tokenizers>=0.15.0
 
 # --------------------------------------------------
-# Track A — Tree ensembles (Kaggle)
+# Track A — Tree ensembles (inference)
 # --------------------------------------------------
 xgboost>=2.0.0
-lightgbm>=4.3.0
-
-# --------------------------------------------------
-# Hyperparameter Optimization
-# --------------------------------------------------
-optuna>=3.6.0

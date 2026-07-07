@@ -1,3 +1,13 @@
+---
+title: Spam Email Detection
+emoji: 📧
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # 🛡️ Spam Email Detection — ML-Powered Gmail Protection
 
 **A production-grade spam and phishing detection system with a Chrome extension, FastAPI backend, layered ML detection, explainable predictions, user feedback loop, retraining pipeline, and optional MySQL persistence.**
