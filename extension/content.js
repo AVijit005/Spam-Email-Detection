@@ -247,11 +247,23 @@ function createBanner(prediction, payload) {
 
 function injectBanner(prediction, payload) {
     removeBanner();
-    const anchor = window.DomParser?.getBannerAnchor?.();
+    const banner = createBanner(prediction, payload);
+
+    let anchor = window.DomParser?.getBannerAnchor?.();
     if (!anchor) {
-        return;
+        const bodyEl = window.DomParser?.getBodyElement?.();
+        if (bodyEl) {
+            anchor = bodyEl.closest("[role="list"]") || bodyEl.closest(".nH") || bodyEl.parentElement?.parentElement;
+        }
     }
-    anchor.insertBefore(createBanner(prediction, payload), anchor.firstChild);
+    if (!anchor) {
+        anchor = document.querySelector('[role="list"]') || document.querySelector(".nH");
+    }
+    if (anchor) {
+        anchor.insertBefore(banner, anchor.firstChild);
+    } else {
+        console.warn("Spam Detector: could not find banner anchor in Gmail DOM");
+    }
 }
 
 function injectWarningBanner(message) {
