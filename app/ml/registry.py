@@ -180,7 +180,7 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
     HF Spaces clones the repo which excludes large model files via .gitignore.
     This downloads them on first startup.
     """
-    if (model_dir / "config.json").exists():
+    if (model_dir / "config.json").exists() and (model_dir / "model.safetensors").exists():
         return
 
     from app.config import settings
