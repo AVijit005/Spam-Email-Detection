@@ -174,10 +174,35 @@ def verify_sha256(filepath, expected_sha_path):
     assert actual == expected, f"SHA-256 mismatch: {actual[:8]} != {expected[:8]}"
     print(f"SHA-256 verified for {filepath}")
 
-verify_sha256("model/transformer_model.pt", "model/transformer_model.pt.sha256")
+verify_sha256("model/hf_model/model.safetensors", "model/hf_model/model.safetensors.sha256")
 ```
 
-### 3. Verify metadata completeness
+### 3. Verify HF-native model loads correctly
+
+```python
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    "model/hf_model", local_files_only=True
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    "model/hf_model", local_files_only=True
+)
+
+assert model.config.num_labels == 2
+assert tokenizer.pad_token == "[PAD]"
+
+text = "URGENT: Verify your account now!"
+inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+with torch.no_grad():
+    logits = model(**inputs).logits
+probs = torch.softmax(logits, dim=-1)
+print(f"Spam probability: {probs[0][1]:.4f}")
+print("HF-native model verification PASSED")
+```
+
+### 4. Verify metadata completeness
 
 ```python
 import json

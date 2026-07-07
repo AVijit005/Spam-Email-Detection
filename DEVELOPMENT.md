@@ -1,78 +1,76 @@
-# Development Notes
+# Development Notes (v3.1)
 
-## Where The Project Ended Up
+## Where The Project Stands
 
-The project is no longer a basic single-model spam classifier. It is now a layered Gmail spam and phishing detector with:
+The project is a production-grade Gmail spam and phishing detector with:
 
-- extension-side Gmail extraction and UI overlays
-- backend-side whitelist, trusted-service, rules, benign-context, and ML layers
-- explanation output for predictions
-- user feedback capture and retraining
-- optional MySQL-backed feedback persistence
-- env-driven startup and deployment support
+- Chrome extension: Gmail DOM extraction, banner overlays, popup scanner, options page, feedback
+- FastAPI backend: 5-layer detection pipeline, dual-track ensemble inference (XGBoost + DeBERTa-v3)
+- ML pipeline: 6-stage training orchestrator (Load → Classical → Transformer → Ensemble → Retrain → Export)
+- Docker deployment with SHA-256 model integrity, PII redaction, rate limiting, CORS
 
-## Final Technical Direction
+## Detection Pipeline
 
-### Detection Stack
+1. **User whitelist** — trusted sender domains configured in extension options
+2. **Trusted service catalog** — curated list of financial/service provider domains
+3. **Phishing/spam rules** — keyword patterns, urgency signals, credential harvesting
+4. **Benign context guard** — conversational language, personal references, meeting context
+5. **ML ensemble** — XGBoost (TF-IDF + 32 meta-features) + DeBERTa-v3 (contextual) via weighted late fusion
 
-The backend classifies messages in this order:
+## Model Architecture
 
-1. user whitelist
-2. trusted-service catalog
-3. phishing and spam rules
-4. benign-context guardrails
-5. ML model
+The production deployment uses an **EnsemblePredictor** with:
 
-That made the system more stable than relying on ML alone.
+- **XGBoost** (classical track): 25,000 TF-IDF word unigrams/bigrams + 32 engineered meta-features
+- **DeBERTa-v3** (transformer track): `microsoft/deberta-v3-base` fine-tuned with focal loss (γ=2.0), FGM adversarial training (ε=0.5), curriculum learning
+- **Fusion**: Weighted late fusion with w=0.35 (grid-searched optimal), gracefully degrades to XGBoost-only if transformer unavailable
 
-### Model Design
+Trained on 342,178 emails (Kaggle GPU). Ensemble F1: 99.22%.
 
-The saved model is currently `LogisticRegression`, trained with:
+## Training Pipeline
 
-- word TF-IDF features
-- char TF-IDF features
-- phishing-oriented metadata features
+6-stage orchestrator (`model/train_model.py`):
 
-This keeps the classifier explainable while still performing well on the project dataset.
+1. Load & preprocess CSV (token replacement, parallel processing)
+2. Track A — Classical ML (SGDClassifier, XGBoost, LightGBM) with optional Optuna HPO
+3. Track B — Transformer fine-tuning (DeBERTa-v3) with focal loss + FGM + curriculum learning
+4. Ensemble fusion — grid search for optimal fusion weight
+5. Retrain winner on full dataset
+6. Export artifacts with SHA-256 integrity hashes
 
-### Training Design
+Supports: Kaggle auto-detection, multi-GPU DDP, checkpoint resume, VRAM-probed batch sizing.
 
-Training now:
+## Extension Architecture
 
-- splits before fitting vectorizers to avoid leakage
-- evaluates on a clean holdout
-- retrains the selected estimator on the full dataset
-- can add reviewed feedback samples into training
-- records model and feedback metadata in `model_metadata.json`
+- Manifest V3 with service worker background
+- Content script with MutationObserver for Gmail DOM changes
+- Banner injection with feedback buttons
+- Popup: paste-and-analyze, Gmail extraction, scan history, settings
+- Options: backend URL, API key, auto-scan toggle, history limit
+- API key-aware — sends `X-API-Key` header when configured
 
-### Feedback Loop
+## Configuration
 
-Reviewed predictions now feed the retraining pipeline through:
+All settings use `SPAM_` prefixed environment variables (pydantic-settings).
 
-- local JSONL storage by default
-- optional MySQL storage
-- `POST /retrain` from the backend
-- retrain controls in the extension options page
+Key settings:
+- `SPAM_ENABLE_TRANSFORMER` — toggle ensemble vs XGBoost-only (default: true)
+- `SPAM_TRANSFORMER_DEVICE` — `cpu` or `cuda` (default: cpu)
+- `SPAM_TRANSFORMER_MODEL_NAME` — HuggingFace model ID (default: microsoft/deberta-v3-base)
+- `SPAM_MODEL_PATH`, `SPAM_TRANSFORMER_MODEL_PATH`, `SPAM_TRANSFORMER_TOKENIZER_PATH` — artifact paths
 
-## Engineering Changes That Mattered
+## Current Quality
 
-- shared preprocessing logic moved into `spam_detector_core.py`
-- API logic became testable and metadata-backed
-- feedback persistence was abstracted into `feedback_store.py`
-- runtime config moved to env-driven configuration in `runtime_config.py`
-- deployment startup moved to `run_server.py`
-- Docker and Compose files were added for reproducible backend startup
+- Backend unit tests: 185 passing
+- Integration tests: 26 passing
+- Legacy tests: 20 passing
+- SHA-256 integrity verified for all model artifacts
+- Known limitations documented in `KNOWN_ISSUES.md`
 
-## Current Verified Quality
+## Remaining Opportunities
 
-- backend tests: `15/15` passing
-- verifier scenarios: `6/6` passing
-- holdout accuracy: `0.9750`
-- spam F1: `0.9222`
-
-## Remaining Weak Points
-
-- the base dataset is still small and not very modern for real phishing
-- the extension has not been manually exercised in every Gmail layout edge case
-- retraining is user-triggered, not scheduled
-- the backend still has no authentication or multi-user model management
+- No extension automated tests (DOM parsing, banner injection)
+- Gmail DOM selectors may break on UI updates
+- Single Gunicorn worker (acceptable for current ensemble memory footprint)
+- No CI/CD pipeline
+- Retraining is user-triggered, not scheduled

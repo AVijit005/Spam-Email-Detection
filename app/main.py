@@ -40,6 +40,53 @@ def load_resources() -> None:
     whitelist = load_user_whitelist(settings.whitelist_path)
     trusted = load_domain_catalog(settings.trusted_domains_path)
 
+    # --- Ensemble construction ---
+    # Build EnsemblePredictor if transformer artifacts are available.
+    # Falls back gracefully to XGBoost-only if loading fails.
+    ensemble_info = metadata.get("ensemble_info")
+    if settings.enable_transformer and ensemble_info:
+        try:
+            from app.ml.registry import load_transformer
+
+            fusion_weight = ensemble_info.get("fusion_weight", 0.50)
+            transformer_model_name = metadata.get("transformer_info", {}).get(
+                "model_id", settings.transformer_model_name
+            )
+
+            result = load_transformer(
+                model_dir=settings.transformer_model_dir,
+                device=settings.transformer_device,
+            )
+
+            if result is not None:
+                transformer_model, transformer_tokenizer = result
+                from app.ml.ensemble import EnsemblePredictor
+
+                ensemble = EnsemblePredictor(
+                    classical_model=model,
+                    classical_vectorizer_bundle=vectorizer,
+                    transformer_model=transformer_model,
+                    transformer_tokenizer=transformer_tokenizer,
+                    fusion_weight=fusion_weight,
+                    transformer_device=settings.transformer_device,
+                )
+                model = ensemble
+                logger.info(
+                    "Ensemble Predictor active: XGBoost + %s (w=%.2f) | F1=%.4f",
+                    transformer_model_name, fusion_weight,
+                    metadata.get("selected_metrics", {}).get("ensemble_f1", 0),
+                )
+            else:
+                logger.warning(
+                    "Transformer model not found — running XGBoost-only. "
+                    "Expected ensemble F1: %.4f.",
+                    metadata.get("selected_metrics", {}).get("ensemble_f1", 0),
+                )
+        except Exception:
+            logger.exception(
+                "Transformer loading failed — falling back to XGBoost-only."
+            )
+
     if model is None or vectorizer is None:
         logger.warning("Model or vectorizer not found at startup. Predict will return 500.")
         if settings.bootstrap_model_if_missing and settings.train_script_path.exists():

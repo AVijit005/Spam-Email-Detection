@@ -37,7 +37,7 @@ graph TB
 
         subgraph MLSub["ML Subsystem"]
             VEC[TfidfVectorizer]
-            LR[LogisticRegression]
+            ENS[EnsemblePredictor<br/>XGBoost + DeBERTa-v3]
             EXP[Explanation Engine]
         end
 
@@ -128,7 +128,7 @@ flowchart TD
     BENIGN -->|Yes| BENIGN_RESULT[Label: Not Spam<br/>Confidence: 0.76-0.82<br/>Layer: benign_context/promo]
     BENIGN -->|No| ML_LAYER[ML Classification]
     ML_LAYER --> BUILD[Build Feature Matrix]
-    BUILD --> PREDICT[LogisticRegression.predict_proba]
+    BUILD --> PREDICT[Ensemble.predict_proba]
     PREDICT --> THRESHOLD{spam_prob >= threshold?}
     THRESHOLD -->|Yes| SPAM[Label: Spam<br/>Layer: ml]
     THRESHOLD -->|No| HAM[Label: Not Spam<br/>Layer: ml]
@@ -146,7 +146,7 @@ flowchart TD
 | **Rule-Based** | >=2 spam phrases or >=1 phrase + >=2 signals | 0.86–0.99 | Matched phrases and indicator signals |
 | **Benign Context** | Conversational wording, no links/urgency | 0.82 | "Benign-context detection found conversational wording without phishing indicators" |
 | **Benign Promo** | Promotional wording, no links, low caps | 0.76 | "Benign promotional detection found retail language without phishing indicators" |
-| **ML Model** | LogisticRegression spam probability >= threshold | 0.00–0.99 | Top contributing features from model coefficients |
+| **ML Model** | Ensemble (XGBoost + DeBERTa-v3) spam probability >= threshold | 0.00–0.99 | Top contributing features from model coefficients |
 
 ## Feature Matrix
 
@@ -163,11 +163,11 @@ flowchart LR
     CHAR --> CONCAT
     META --> CONCAT
     CONCAT --> MATRIX[Combined CSR Matrix]
-    MATRIX --> MODEL[LogisticRegression]
+    MATRIX --> MODEL[Ensemble<br/>XGBoost + DeBERTa]
     MODEL --> PROB[spam_prob, ham_prob]
 ```
 
-### Meta Features (16-dim)
+### Meta Features (32-dim)
 
 | # | Feature | Description |
 |---|---|---|
@@ -175,7 +175,7 @@ flowchart LR
 | 2 | `caps_ratio` | Ratio of uppercase letters |
 | 3 | `exclamation_count` | Count of `!` characters |
 | 4 | `question_count` | Count of `?` characters |
-| 5 | `money_count` | Money amounts ($, €, £) detected |
+| 5 | `money_count` | Money amounts (all currencies) detected |
 | 6 | `phone_count` | Phone numbers detected |
 | 7 | `word_count` | Total word count |
 | 8 | `avg_word_length` | Average word length |
@@ -187,6 +187,10 @@ flowchart LR
 | 14 | `symbol_ratio` | Ratio of symbol characters |
 | 15 | `percent_hits` | Count of `%` characters |
 | 16 | `mixed_token_hits` | Mixed letter-number tokens |
+| 17–24 | (URL analysis, HTML, obfuscation) | Advanced detection features |
+| 25–32 | (Credential, keyword, attachment) | Phishing-specific features |
+
+> Full 32-feature table in [MODEL_ARCHITECTURE.md](../MODEL_ARCHITECTURE.md#32-meta-features).
 
 ## Retraining Flow
 
@@ -303,6 +307,7 @@ graph TD
     PREDICT --> DETECTOR[app/core/detector.py]
     HEALTH --> FEEDBACK_STORE[app/storage/feedback.py]
 
+    DETECTOR --> ENSEMBLE[app/ml/ensemble.py]
     DETECTOR --> DOMAIN
     DETECTOR --> EXPLAIN[app/core/explain.py]
     DETECTOR --> FEATURES[app/core/features.py]
@@ -339,5 +344,8 @@ graph TD
 4. **SHA-256 sidecar files**: Model integrity uses hash sidecar files (`model.pkl.sha256`) rather than embedded checksums, allowing hash verification to be retrofitted to existing models and updated independently.
 
 5. **Concurrency lock on retraining**: A `threading.Lock` prevents overlapping retraining jobs. The lock is non-blocking — concurrent requests receive 409 instead of queuing.
+
+6. **PII at the boundary**: PII redaction occurs at the API entry point (`predict_email`) rather than in storage, ensuring redacted data never reaches the feedback store or model training pipeline.
+ instead of queuing.
 
 6. **PII at the boundary**: PII redaction occurs at the API entry point (`predict_email`) rather than in storage, ensuring redacted data never reaches the feedback store or model training pipeline.

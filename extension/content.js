@@ -191,9 +191,29 @@ function injectBanner(prediction, payload) {
     anchor.insertBefore(createBanner(prediction, payload), anchor.firstChild);
 }
 
+function injectWarningBanner(message) {
+    removeBanner();
+    const banner = document.createElement("section");
+    banner.id = BANNER_ID;
+    banner.className = "spam-detector-banner spam-detector-banner--warning";
+    const text = document.createElement("p");
+    text.className = "spam-detector-banner__reason";
+    text.textContent = message;
+    banner.appendChild(text);
+    const anchor = window.DomParser?.getBannerAnchor?.();
+    if (anchor) {
+        anchor.insertBefore(banner, anchor.firstChild);
+    }
+}
+
 async function analyzeOpenEmail(force = false) {
     const data = window.DomParser?.getEmailData?.();
     if (!data || (!data.subject && !data.body)) {
+        return;
+    }
+
+    if (!data.sender && !data.subject && !data.body) {
+        injectWarningBanner("Spam Detector could not read this email — Gmail may have updated its layout. Try refreshing or pasting into the popup.");
         return;
     }
 

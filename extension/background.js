@@ -1,5 +1,6 @@
 const DEFAULT_SETTINGS = {
     apiBaseUrl: "http://127.0.0.1:8000",
+    apiKey: "",
     requestTimeoutMs: 12000,
     autoScanEnabled: true,
     historyLimit: 12
@@ -73,6 +74,7 @@ async function saveSettings(partialSettings = {}) {
     };
 
     merged.apiBaseUrl = normalizeApiBaseUrl(merged.apiBaseUrl);
+    merged.apiKey = typeof merged.apiKey === "string" ? merged.apiKey.trim() : "";
     merged.requestTimeoutMs = Math.max(2000, Math.min(60000, Number(merged.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs));
     merged.historyLimit = Math.max(5, Math.min(50, Number(merged.historyLimit) || DEFAULT_SETTINGS.historyLimit));
     merged.autoScanEnabled = Boolean(merged.autoScanEnabled);
@@ -86,9 +88,15 @@ async function fetchJson(path, options = {}, settingsOverride = null) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), settings.requestTimeoutMs);
 
+    const headers = { ...(options.headers || {}) };
+    if (settings.apiKey) {
+        headers["X-API-Key"] = settings.apiKey;
+    }
+
     try {
         const response = await fetch(`${settings.apiBaseUrl}${path}`, {
             ...options,
+            headers,
             signal: controller.signal
         });
 

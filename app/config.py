@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,11 +15,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SPAM_", env_file=".env", env_file_encoding="utf-8")
 
     api_host: str = "0.0.0.0"
-    api_port: int = 8000
+    api_port: int = int(os.environ.get("PORT", "8000"))
     log_level: str = "info"
 
     allow_origin_regex: str = (
-        r"^(chrome-extension://[a-z]{32,64}|moz-extension://[a-z0-9-]{8,64}|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?)$"
+        r"^(chrome-extension://[a-z]{32,64}|moz-extension://[a-z0-9-]{8,64}|"
+        r"http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?|"
+        r"https://[a-zA-Z0-9-]+\.hf\.space)$"
     )
 
     train_on_start: bool = False
@@ -48,6 +51,12 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 15
 
     api_key: str = ""
+
+    # --- Ensemble / Transformer Configuration ---
+    enable_transformer: bool = True
+    transformer_model_dir: Path = MODEL_DIR / "hf_model"
+    transformer_model_name: str = "microsoft/deberta-v3-base"
+    transformer_device: str = "cpu"
 
 
 settings = Settings()

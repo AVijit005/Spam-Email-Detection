@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.config import settings
+from app.core.detector import _is_ensemble_model
 from app.schemas.health import HealthResponse
 from app.storage.feedback import FeedbackStoreError, feedback_backend_name, feedback_summary
 
@@ -34,6 +35,7 @@ def health() -> HealthResponse:
         status=status,
         model_loaded=model is not None,
         vectorizer_loaded=vectorizer is not None,
+        ensemble_active=_is_ensemble_model(model) and getattr(model, "has_transformer", False) if model is not None else False,
         feedback_backend=backend_name,
         user_whitelist_count=len(user_whitelist_domains),
         trusted_domain_catalog_count=len(trusted_domain_catalog),

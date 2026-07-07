@@ -18,6 +18,8 @@ model/checkpoints/
 model/train_*.py
 model/shared.py
 model/__pycache__/
+model/transformer_model.pt
+model/transformer_tokenizer/
 tests/
 docs/
 extension/
