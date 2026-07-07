@@ -13,7 +13,7 @@ async function getSettingsDirect() {
         chrome.storage.sync.get("settings", (data) => {
             const stored = data.settings || {};
             cachedSettings = {
-                apiBaseUrl: stored.apiBaseUrl || "https://avijit070-spam-detection-system.hf.space",
+                apiBaseUrl: stored.apiBaseUrl || "https://avijit070-email-classifier-api.hf.space",
                 apiKey: stored.apiKey || "",
                 requestTimeoutMs: Math.max(25000, Number(stored.requestTimeoutMs) || 30000),
                 autoScanEnabled: Boolean(stored.autoScanEnabled !== undefined ? stored.autoScanEnabled : true)

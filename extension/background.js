@@ -1,5 +1,5 @@
 const DEFAULT_SETTINGS = {
-    apiBaseUrl: "https://avijit070-spam-detection-system.hf.space",
+    apiBaseUrl: "https://avijit070-email-classifier-api.hf.space",
     apiKey: "",
     requestTimeoutMs: 30000,
     autoScanEnabled: true,
