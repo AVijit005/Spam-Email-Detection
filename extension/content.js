@@ -206,9 +206,17 @@ function injectWarningBanner(message) {
     }
 }
 
+let retryCount = 0;
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 1500;
+
 async function analyzeOpenEmail(force = false) {
     const data = window.DomParser?.getEmailData?.();
     if (!data || (!data.subject && !data.body)) {
+        if (force && retryCount < MAX_RETRIES) {
+            retryCount++;
+            setTimeout(() => analyzeOpenEmail(true), RETRY_DELAY_MS);
+        }
         return;
     }
 
@@ -226,6 +234,7 @@ async function analyzeOpenEmail(force = false) {
         return;
     }
 
+    retryCount = 0;
     analysisInFlight = true;
     lastSignature = signature;
 
@@ -265,9 +274,31 @@ observer.observe(document.body, {
 document.addEventListener("visibilitychange", async () => {
     if (!document.hidden) {
         await refreshSettings();
+        lastSignature = "";
         scheduleAnalysis(true);
     }
 });
+
+window.addEventListener("hashchange", () => {
+    lastSignature = "";
+    scheduleAnalysis(true);
+});
+
+let pollTimer = null;
+function startPolling() {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+        if (!document.hidden && autoScanEnabled) {
+            const data = window.DomParser?.getEmailData?.();
+            if (data && (data.subject || data.body)) {
+                const sig = emailSignature(data);
+                if (sig !== lastSignature && !analysisInFlight) {
+                    scheduleAnalysis(true);
+                }
+            }
+        }
+    }, 5000);
+}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.command === "get_email_data") {
@@ -277,4 +308,5 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 refreshSettings().then(() => {
     scheduleAnalysis(true);
+    startPolling();
 });
