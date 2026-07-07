@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from app.config import settings
 from app.core.auth import require_auth
@@ -53,7 +53,7 @@ def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     stored_at_utc = datetime.now(timezone.utc).isoformat()
-    feedback_id = f"fb_{request.prediction_id}_{stored_at_utc.replace(':', '').replace('-', '')}"
+    feedback_id = f"fb_{request.prediction_id[:16]}_{stored_at_utc.replace(':', '').replace('-', '')[:14]}"
     redacted_subject = redact_subject(request.subject)
     redacted_body = redact_email_body(request.body)
     entry = {

@@ -18,6 +18,12 @@ model/checkpoints/
 model/train_*.py
 model/shared.py
 model/__pycache__/
+model/hf_model/
+model/transformer_model.pt
+model/transformer_tokenizer/
+model/spam_model.pkl
+model/vectorizer.pkl
+model/model_metadata.json
 tests/
 docs/
 extension/

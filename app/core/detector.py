@@ -63,10 +63,9 @@ def _vectorizer_bundle(vectorizer: Any) -> dict[str, Any]:
 
 def _is_transformer_model(model: Any) -> bool:
     try:
-        cls_name = type(model).__name__
+        return hasattr(model, "config") and hasattr(model.config, "model_type") and hasattr(model, "forward")
     except Exception:
-        cls_name = ""
-    return cls_name == "TransformerWrapper"
+        return False
 
 
 def _is_ensemble_model(model: Any) -> bool:

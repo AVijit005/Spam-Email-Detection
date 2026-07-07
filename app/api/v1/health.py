@@ -29,7 +29,7 @@ def health() -> HealthResponse:
         feedback_error = str(error)
         status = "degraded"
 
-    training_info = model_metadata.get("feedback_training") or {} if model_metadata else {}
+    training_info = (model_metadata.get("feedback_training") or {}) if model_metadata else {}
 
     return HealthResponse(
         status=status,

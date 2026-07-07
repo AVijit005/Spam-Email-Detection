@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -24,13 +23,9 @@ from app.api.v1 import retrain as retrain_mod
 
 
 def load_resources() -> None:
-    metadata: dict = {}
-    if settings.metadata_path.exists():
-        with open(settings.metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
-
     model = None
     vectorizer = None
+    metadata: dict = {}
     artifact = load_model(settings.model_path, settings.vectorizer_path, settings.metadata_path)
     if artifact is not None:
         model = artifact.model
@@ -95,10 +90,14 @@ def load_resources() -> None:
             logger.info("Bootstrap enabled — triggering initial training...")
             import subprocess
             import sys as _sys
-            subprocess.Popen(
-                [_sys.executable, str(settings.train_script_path)],
-                cwd=str(settings.train_script_path.parent.parent),
-            )
+            try:
+                proc = subprocess.Popen(
+                    [_sys.executable, str(settings.train_script_path)],
+                    cwd=str(settings.train_script_path.parent.parent),
+                )
+                logger.info("Bootstrap training process started (PID %d).", proc.pid)
+            except Exception as exc:
+                logger.error("Failed to start bootstrap training: %s", exc)
 
     if not settings.api_key:
         logger.warning("SPAM_API_KEY not set — authenticated endpoints (feedback, retrain) are unprotected.")

@@ -14,14 +14,18 @@ Falls back gracefully to classical-only if the transformer is unavailable.
 
 from __future__ import annotations
 
+import logging
 import warnings
 from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
 
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+_TRANSFORMER_FAIL_THRESHOLD = 3
 
 
 class EnsemblePredictor:
@@ -42,6 +46,7 @@ class EnsemblePredictor:
         self.transformer_device = transformer_device
         self.fusion_weight = fusion_weight
         self.transformer_max_length = transformer_max_length
+        self._consecutive_transformer_failures = 0
 
     @property
     def has_transformer(self) -> bool:
@@ -52,22 +57,19 @@ class EnsemblePredictor:
         was_training = self.transformer_model.training
         self.transformer_model.eval()
         device = next(self.transformer_model.parameters()).device
-        probs_list = []
-        for text in texts:
-            enc = self.transformer_tokenizer(
-                text, truncation=True, padding="max_length",
-                max_length=self.transformer_max_length, return_tensors="pt",
-            )
-            input_ids = enc["input_ids"].to(device)
-            attention_mask = enc["attention_mask"].to(device)
-            with torch.no_grad():
-                with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu", enabled=device.type == "cuda"):
-                    outputs = self.transformer_model(input_ids=input_ids, attention_mask=attention_mask)
-            probs = torch.softmax(outputs.logits, dim=-1).cpu().numpy()
-            probs_list.append(probs)
+        enc = self.transformer_tokenizer(
+            texts, truncation=True, padding="max_length",
+            max_length=self.transformer_max_length, return_tensors="pt",
+        )
+        input_ids = enc["input_ids"].to(device)
+        attention_mask = enc["attention_mask"].to(device)
+        with torch.no_grad():
+            with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu", enabled=device.type == "cuda"):
+                outputs = self.transformer_model(input_ids=input_ids, attention_mask=attention_mask)
+        probs = torch.softmax(outputs.logits, dim=-1).cpu().numpy()
         if was_training:
             self.transformer_model.train()
-        return np.vstack(probs_list)
+        return probs
 
     def transformer_proba(self, texts: list[str]) -> np.ndarray:
         return self._transformer_proba(texts)
@@ -78,6 +80,7 @@ class EnsemblePredictor:
             return p_classical
         try:
             p_transformer = self._transformer_proba(raw_texts)
+            self._consecutive_transformer_failures = 0
             p_spam = (
                 self.fusion_weight * p_classical[:, 1]
                 + (1 - self.fusion_weight) * p_transformer[:, 1]
@@ -85,12 +88,19 @@ class EnsemblePredictor:
             p_ham = 1.0 - p_spam
             return np.column_stack([p_ham, p_spam])
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Transformer inference failed (%s) — falling back to classical-only.", exc,
+            self._consecutive_transformer_failures += 1
+            logger.warning(
+                "Transformer inference failed (%s) — falling back to classical-only "
+                "(failure %d/%d).", exc, self._consecutive_transformer_failures,
+                _TRANSFORMER_FAIL_THRESHOLD,
             )
-            self.transformer_model = None
-            self.transformer_tokenizer = None
+            if self._consecutive_transformer_failures >= _TRANSFORMER_FAIL_THRESHOLD:
+                logger.error(
+                    "Transformer failed %d consecutive times — permanently disabling "
+                    "transformer branch for this process lifetime.", self._consecutive_transformer_failures,
+                )
+                self.transformer_model = None
+                self.transformer_tokenizer = None
             return p_classical
 
     def predict(self, features: sp.csr_matrix, raw_texts: list[str], threshold: float = 0.55) -> np.ndarray:
@@ -110,15 +120,15 @@ def grid_search_fusion_weight(
     results = []
     for w in np.linspace(0.0, 1.0, n_steps):
         fused = w * classical_probs[:, 1] + (1 - w) * transformer_probs[:, 1]
-        f1 = f1_score(y_true, fused >= threshold, pos_label=1)
-        results.append((w, f1))
-        if f1 > best_f1:
-            best_f1 = f1
+        step_f1 = f1_score(y_true, fused >= threshold, pos_label=1)
+        results.append((w, step_f1))
+        if step_f1 > best_f1:
+            best_f1 = step_f1
             best_weight = w
 
     print(f"\n  Fusion weight grid search ({n_steps} steps):")
-    for w, f1_score_val in results:
+    for w, step_f1 in results:
         marker = "<-" if w == best_weight else "  "
-        print(f"    {marker} w={w:.2f} → Spam F1={f1_score_val:.4f}")
+        print(f"    {marker} w={w:.2f} → Spam F1={step_f1:.4f}")
 
     return {"best_weight": round(best_weight, 4), "best_f1": round(best_f1, 4)}

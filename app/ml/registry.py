@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import pickle
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ModelIntegrityError(RuntimeError):
@@ -98,12 +100,9 @@ def load_transformer(
     """
     try:
         import torch  # noqa: F811
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
     except ImportError:
-        import logging
-        logging.getLogger(__name__).warning(
-            "transformers/torch not installed — running XGBoost-only."
-        )
+        logger.warning("transformers/torch not installed — running XGBoost-only.")
         return None
 
     # Strategy 1: HF format in model_dir
@@ -127,16 +126,13 @@ def load_transformer(
             hf_model.eval()
             return hf_model, hf_tokenizer
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "HF format load failed from %s: %s — trying .pt fallback.", model_dir, exc,
             )
 
-    # Strategy 2: Original trained .pt format (state_dict → need to reconstruct model)
+    # Strategy 2: Original trained .pt format (state_dict -> need to reconstruct model)
     if pt_model_path and pt_model_path.exists() and pt_tokenizer_dir and pt_tokenizer_dir.is_dir():
         try:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.info("Loading transformer state_dict from .pt file: %s", pt_model_path)
             state_dict = torch.load(str(pt_model_path), map_location=device, weights_only=True)
 
@@ -166,8 +162,7 @@ def load_transformer(
                 pt_tokenizer.pad_token = pt_tokenizer.eos_token
             return pt_model, pt_tokenizer
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 ".pt load failed from %s: %s — running XGBoost-only.", pt_model_path, exc,
             )
 
@@ -189,14 +184,11 @@ def _ensure_hf_model_available(model_dir: Path) -> None:
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "huggingface_hub not installed — cannot download model from HF Hub."
         )
         return
 
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info("Model files not found locally. Downloading %s from HuggingFace Hub...", repo_id)
     try:
         model_dir.mkdir(parents=True, exist_ok=True)

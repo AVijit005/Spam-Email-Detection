@@ -12,3 +12,4 @@ class RetrainResponse(BaseModel):
     feedback_rows_used: int
     feedback_last_consumed_utc: str | None = None
     spam_f1: float | None = None
+    ensemble_f1: float | None = None

@@ -44,7 +44,7 @@ RUN mkdir -p /app/data /app/model/hf_model /app/model/checkpoints && \
 
 USER appuser
 
-EXPOSE 7860
+EXPOSE ${PORT:-8000}
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import os; from urllib.request import urlopen; urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/v1/health')" || exit 1
