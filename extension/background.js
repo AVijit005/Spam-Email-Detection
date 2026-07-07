@@ -44,10 +44,14 @@ function getCachedPrediction(key) {
 async function getSettings() {
     const data = await chrome.storage.sync.get("settings");
     const stored = data.settings || {};
-    return {
+    const merged = {
         ...DEFAULT_SETTINGS,
         ...stored
     };
+    if (merged.requestTimeoutMs < 25000) {
+        merged.requestTimeoutMs = 25000;
+    }
+    return merged;
 }
 
 function normalizeApiBaseUrl(url) {
