@@ -14,7 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.api.v1.router import v1_router
-from app.config import settings
+from app.config import MODEL_DIR, settings
 from app.core.domain import load_domain_catalog, load_user_whitelist
 from app.ml.registry import load_model
 from app.api.v1 import health as health_mod
@@ -56,6 +56,8 @@ def load_resources() -> None:
             result = load_transformer(
                 model_dir=settings.transformer_model_dir,
                 device=settings.transformer_device,
+                pt_model_path=MODEL_DIR / "transformer_model.pt",
+                pt_tokenizer_dir=MODEL_DIR / "transformer_tokenizer",
             )
 
             if result is not None:

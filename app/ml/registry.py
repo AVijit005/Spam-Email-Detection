@@ -85,28 +85,17 @@ def load_model(
 def load_transformer(
     model_dir: Path,
     device: str = "cpu",
+    pt_model_path: Path | None = None,
+    pt_tokenizer_dir: Path | None = None,
 ) -> tuple[Any, Any] | None:
-    """Load transformer model and tokenizer from a Hugging Face model directory.
+    """Load transformer model and tokenizer.
 
-    Expects ``model_dir`` to contain:
-      - config.json
-      - model.safetensors (preferred) or pytorch_model.bin
-      - tokenizer.json
-      - tokenizer_config.json
+    Tries two strategies:
+      1. HF format in ``model_dir`` (config.json + model.safetensors)
+      2. Original trained format (pt_model_path .pt + pt_tokenizer_dir)
 
-    Falls back gracefully if ``transformers`` / ``torch`` are not installed
-    or if the directory is missing required files.
+    Falls back gracefully if ``transformers`` / ``torch`` are not installed.
     """
-    safetensors_path = model_dir / "model.safetensors"
-    _ensure_hf_model_available(model_dir)
-
-    if not model_dir.is_dir() or not (model_dir / "config.json").exists():
-        return None
-
-    sha_path = _hash_path(safetensors_path)
-    if sha_path.exists():
-        _verify_hash(safetensors_path, sha_path.read_text().strip())
-
     try:
         import torch  # noqa: F811
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -117,37 +106,54 @@ def load_transformer(
         )
         return None
 
-    try:
-        model = AutoModelForSequenceClassification.from_pretrained(
-            str(model_dir), local_files_only=True,
-        )
-    except (OSError, EnvironmentError, FileNotFoundError) as exc:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Could not load transformer from %s: %s — running XGBoost-only.",
-            model_dir, exc,
-        )
-        return None
+    # Strategy 1: HF format in model_dir
+    _ensure_hf_model_available(model_dir)
+    if model_dir.is_dir() and (model_dir / "config.json").exists():
+        safetensors_path = model_dir / "model.safetensors"
+        sha_path = _hash_path(safetensors_path)
+        if sha_path.exists():
+            _verify_hash(safetensors_path, sha_path.read_text().strip())
 
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(
-            str(model_dir), local_files_only=True,
-        )
-    except (OSError, EnvironmentError, FileNotFoundError) as exc:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Could not load tokenizer from %s: %s — running XGBoost-only.",
-            model_dir, exc,
-        )
-        return None
+        try:
+            hf_model = AutoModelForSequenceClassification.from_pretrained(
+                str(model_dir), local_files_only=True,
+            )
+            hf_tokenizer = AutoTokenizer.from_pretrained(
+                str(model_dir), local_files_only=True,
+            )
+            if hf_tokenizer.pad_token is None:
+                hf_tokenizer.pad_token = hf_tokenizer.eos_token
+            hf_model.to(device)
+            hf_model.eval()
+            return hf_model, hf_tokenizer
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "HF format load failed from %s: %s — trying .pt fallback.", model_dir, exc,
+            )
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # Strategy 2: Original trained .pt format
+    if pt_model_path and pt_model_path.exists() and pt_tokenizer_dir and pt_tokenizer_dir.is_dir():
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Loading transformer from .pt file: %s", pt_model_path)
+            pt_model = torch.load(str(pt_model_path), map_location=device, weights_only=False)
+            if hasattr(pt_model, "eval"):
+                pt_model.eval()
+            pt_tokenizer = AutoTokenizer.from_pretrained(
+                str(pt_tokenizer_dir), local_files_only=True,
+            )
+            if pt_tokenizer.pad_token is None:
+                pt_tokenizer.pad_token = pt_tokenizer.eos_token
+            return pt_model, pt_tokenizer
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                ".pt load failed from %s: %s — running XGBoost-only.", pt_model_path, exc,
+            )
 
-    model.to(device)
-    model.eval()
-
-    return model, tokenizer
+    return None
 
 
 def _ensure_hf_model_available(model_dir: Path) -> None:
