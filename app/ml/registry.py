@@ -132,15 +132,33 @@ def load_transformer(
                 "HF format load failed from %s: %s — trying .pt fallback.", model_dir, exc,
             )
 
-    # Strategy 2: Original trained .pt format
+    # Strategy 2: Original trained .pt format (state_dict → need to reconstruct model)
     if pt_model_path and pt_model_path.exists() and pt_tokenizer_dir and pt_tokenizer_dir.is_dir():
         try:
             import logging
             logger = logging.getLogger(__name__)
-            logger.info("Loading transformer from .pt file: %s", pt_model_path)
-            pt_model = torch.load(str(pt_model_path), map_location=device, weights_only=False)
-            if hasattr(pt_model, "eval"):
-                pt_model.eval()
+            logger.info("Loading transformer state_dict from .pt file: %s", pt_model_path)
+            state_dict = torch.load(str(pt_model_path), map_location=device, weights_only=True)
+
+            if isinstance(state_dict, dict) and not hasattr(state_dict, "eval"):
+                model_name = "microsoft/deberta-v3-base"
+                logger.info("State dict detected — reconstructing %s model...", model_name)
+                config = AutoConfig.from_pretrained(model_name, num_labels=2)
+                config.id2label = {0: "HAM", 1: "SPAM"}
+                config.label2id = {"HAM": 0, "SPAM": 1}
+                pt_model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name, config=config, ignore_mismatched_sizes=True,
+                )
+                missing, unexpected = pt_model.load_state_dict(state_dict, strict=False)
+                if missing:
+                    logger.warning("State dict missing %d keys: %s", len(missing), missing[:5])
+                if unexpected:
+                    logger.warning("State dict unexpected %d keys: %s", len(unexpected), unexpected[:5])
+            else:
+                pt_model = state_dict
+
+            pt_model.to(device)
+            pt_model.eval()
             pt_tokenizer = AutoTokenizer.from_pretrained(
                 str(pt_tokenizer_dir), local_files_only=True,
             )
