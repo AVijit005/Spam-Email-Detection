@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
         btnFeedbackCorrect: document.getElementById("btn-feedback-correct"),
         btnFeedbackSpam: document.getElementById("btn-feedback-spam"),
         btnFeedbackSafe: document.getElementById("btn-feedback-safe"),
+        btnCopy: document.getElementById("btn-copy"),
         emailInput: document.getElementById("email-input"),
         resultBox: document.getElementById("result"),
         resultContent: document.getElementById("result-content"),
@@ -29,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentPayload = null;
     let currentPrediction = null;
+    let copyTimer = null;
 
     function runtimeMessage(message) {
         return new Promise((resolve, reject) => {
@@ -104,7 +106,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const version = health.model_version && health.model_version !== "untrained"
                 ? ` • ${health.model_version}`
                 : "";
-            updateServiceStatus(`Backend online${version}`, Boolean(health.model_loaded));
+            const onlineText = health.model_loaded
+                ? `Backend online${version}`
+                : `Backend online (model not loaded)${version}`;
+            updateServiceStatus(onlineText, Boolean(health.model_loaded));
 
             const metaBits = [
                 health.trained_at_utc ? `Trained ${formatDate(health.trained_at_utc)}` : null,
@@ -185,15 +190,18 @@ document.addEventListener("DOMContentLoaded", () => {
         elements.resultBox.classList.add("visible");
         elements.resultContent.classList.remove("hidden");
 
+        const isTrustedService = data.label === "Not Spam" && data.rule_layer === "trusted_service";
         const cssClass = data.label === "Spam"
             ? "spam"
-            : data.label === "whitelisted"
-                ? "whitelisted"
+            : (data.label === "whitelisted" || isTrustedService)
+                ? "trusted"
                 : "safe";
 
         const displayLabel = data.label === "whitelisted"
             ? "WHITELISTED"
-            : data.label.toUpperCase();
+            : isTrustedService
+                ? "TRUSTED SENDER"
+                : data.label.toUpperCase();
 
         elements.resultBox.classList.add(cssClass);
         elements.label.textContent = displayLabel;
@@ -247,6 +255,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadFromGmail() {
         const tab = await getActiveTab();
+        if (!tab?.url || !tab.url.startsWith("https://mail.google.com/")) {
+            alert("Open a Gmail message before using Get from Gmail.");
+            return;
+        }
         chrome.tabs.sendMessage(tab.id, { command: "get_email_data" }, (response) => {
             if (chrome.runtime.lastError) {
                 alert("Open a Gmail message before using Get from Gmail.");
@@ -309,7 +321,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     source: "extension_popup"
                 }
             });
-            elements.feedbackStatus.textContent = `Saved feedback (${response.verdict.replace("_", " ")}).`;
+            elements.feedbackStatus.textContent = `Saved feedback (${String(response?.verdict || "ok").replace("_", " ")}).`;
             elements.feedbackStatus.classList.remove("hidden");
             loadHistory();
             refreshBackendStatus();
@@ -358,7 +370,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (entry.verdict) {
                     const verdict = document.createElement("div");
                     verdict.className = "history-verdict";
-                    verdict.textContent = `Feedback: ${entry.verdict.replace("_", " ")}`;
+                    verdict.textContent = `Feedback: ${String(entry.verdict || "ok").replace("_", " ")}`;
                     item.appendChild(verdict);
                 }
 
@@ -384,6 +396,18 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     elements.btnFeedbackSpam.addEventListener("click", () => submitFeedback("Spam"));
     elements.btnFeedbackSafe.addEventListener("click", () => submitFeedback("Not Spam"));
+
+    async function copyResult() {
+        if (!currentPrediction) return;
+        const text = `${currentPrediction.label} (${Math.round((currentPrediction.confidence || 0) * 100)}%) — ${currentPrediction.reason || ""}`;
+        try {
+            await navigator.clipboard.writeText(text);
+            elements.btnCopy.classList.add("copied");
+            clearTimeout(copyTimer);
+            copyTimer = setTimeout(() => elements.btnCopy.classList.remove("copied"), 1400);
+        } catch (e) { /* clipboard may be blocked */ }
+    }
+    elements.btnCopy.addEventListener("click", copyResult);
 
     elements.emailInput.addEventListener("keydown", (event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {

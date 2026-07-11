@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", async () => {
+function initOptions() {
     const elements = {
         form: document.getElementById("settings-form"),
         apiBaseUrl: document.getElementById("api-base-url"),
@@ -60,7 +60,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     elements.btnCheck.addEventListener("click", async () => {
         try {
             const health = await runtimeMessage({ command: "check_backend_health" });
-            setStatus(`Backend online (${health.feedback_backend}). Model: ${health.model_version}. /v1/health OK`);
+            setStatus(`Backend online. Model: ${health.model_version || "unknown"}. Feedback stored: ${health.feedback_count || 0}. /v1/health OK`);
         } catch (error) {
             setStatus(error.message || "Backend is unavailable.");
         }
@@ -71,7 +71,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             setStatus("Retraining model from reviewed feedback. This can take a few minutes...");
             const result = await runtimeMessage({ command: "retrain_model" });
             setStatus(
-                `Retrained ${result.model_version} via ${result.feedback_backend}. Feedback used: ${result.feedback_rows_used}.`
+                `Retrained ${result.model_version || "model"}. Feedback used: ${result.feedback_rows_used || 0}.`
             );
         } catch (error) {
             setStatus(error.message || "Could not retrain model.");
@@ -79,4 +79,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     loadSettings().catch((error) => setStatus(error.message || "Could not load settings."));
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    try {
+        initOptions();
+    } catch (error) {
+        const status = document.getElementById("status");
+        if (status) status.textContent = error.message || "Failed to initialize options.";
+    }
 });

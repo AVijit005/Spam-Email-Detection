@@ -6,14 +6,44 @@ const DEFAULT_SETTINGS = {
     historyLimit: 12
 };
 
-const predictionCache = new Map();
 const CACHE_TTL_MS = 90 * 1000;
 
 chrome.runtime.onInstalled.addListener(async () => {
-    const settings = await getSettings();
-    await chrome.storage.sync.set({ settings });
+    try {
+        const current = await getSettings();
+        const normalized = { ...current, apiBaseUrl: normalizeApiBaseUrl(current.apiBaseUrl) };
+        await chrome.storage.sync.set({ settings: normalized });
+    } catch (e) {
+        const settings = { ...DEFAULT_SETTINGS };
+        try {
+            await chrome.storage.sync.set({ settings });
+        } catch (_) { /* ignore */ }
+    }
     console.log("Gmail Spam Detector extension installed");
 });
+
+async function getCachedPrediction(key) {
+    try {
+        const data = await chrome.storage.session.get(key);
+        const cached = data[key];
+        if (!cached) return null;
+        if ((Date.now() - cached.timestamp) > CACHE_TTL_MS) {
+            chrome.storage.session.remove(key);
+            return null;
+        }
+        return cached.value;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function setCachedPrediction(key, value) {
+    try {
+        await chrome.storage.session.set({ [key]: { timestamp: Date.now(), value } });
+    } catch (e) {
+        /* ignore quota / unavailable errors */
+    }
+}
 
 function normalizePayload(payload = {}) {
     return {
@@ -27,31 +57,13 @@ function cacheKey(payload) {
     return JSON.stringify([payload.sender, payload.subject, payload.body]);
 }
 
-function getCachedPrediction(key) {
-    const cached = predictionCache.get(key);
-    if (!cached) {
-        return null;
-    }
-
-    if ((Date.now() - cached.timestamp) > CACHE_TTL_MS) {
-        predictionCache.delete(key);
-        return null;
-    }
-
-    return cached.value;
-}
-
 async function getSettings() {
     const data = await chrome.storage.sync.get("settings");
     const stored = data.settings || {};
-    const merged = {
+    return {
         ...DEFAULT_SETTINGS,
         ...stored
     };
-    if (merged.requestTimeoutMs < 25000) {
-        merged.requestTimeoutMs = 25000;
-    }
-    return merged;
 }
 
 function normalizeApiBaseUrl(url) {
@@ -175,7 +187,7 @@ async function analyzeEmail(payload) {
     }
 
     const key = cacheKey(normalized);
-    const cached = getCachedPrediction(key);
+    const cached = await getCachedPrediction(key);
     if (cached) {
         return cached;
     }
@@ -186,10 +198,7 @@ async function analyzeEmail(payload) {
         body: JSON.stringify(normalized)
     });
 
-    predictionCache.set(key, {
-        timestamp: Date.now(),
-        value: prediction
-    });
+    await setCachedPrediction(key, prediction);
     await pushHistoryEntry(normalized, prediction);
     return prediction;
 }
@@ -217,7 +226,9 @@ async function retrainModel() {
         ...settings,
         requestTimeoutMs: Math.max(settings.requestTimeoutMs, 15 * 60 * 1000)
     });
-    predictionCache.clear();
+    try {
+        await chrome.storage.session.clear();
+    } catch (e) { /* ignore */ }
     return response;
 }
 
@@ -284,9 +295,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (command === "clear_prediction_cache") {
-        predictionCache.clear();
-        sendResponse({ ok: true });
-        return false;
+        chrome.storage.session.clear()
+            .then(() => sendResponse({ ok: true }))
+            .catch(() => sendResponse({ ok: true }));
+        return true;
     }
 
     return false;

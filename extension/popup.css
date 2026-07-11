@@ -1,4 +1,27 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@font-face {
+    font-family: "Inter";
+    src: url("assets/Inter-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Inter";
+    src: url("assets/Inter-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Inter";
+    src: url("assets/Inter-SemiBold.woff2") format("woff2");
+    font-weight: 600;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Inter";
+    src: url("assets/Inter-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-display: swap;
+}
 
 :root {
     --neon-pink: #ff006e;
@@ -6,6 +29,7 @@
     --neon-blue: #3a86ff;
     --neon-cyan: #00f5ff;
     --neon-green: #06ffa5;
+    --grad: linear-gradient(135deg, #00f5ff 0%, #8338ec 52%, #ff006e 100%);
     --dark-bg: #0a0e27;
     --card-bg: rgba(15, 23, 42, 0.85);
     --glass-border: rgba(255, 255, 255, 0.1);
@@ -398,7 +422,7 @@ body {
 }
 
 .gradient-text {
-    background: linear-gradient(135deg, var(--neon-cyan) 0%, var(--neon-pink) 100%);
+    background: var(--grad);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -750,27 +774,17 @@ body {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, var(--neon-blue) 0%, var(--neon-purple) 100%);
+    background: var(--grad);
     color: white;
-    box-shadow: 0 4px 20px rgba(58, 134, 255, 0.4);
-    animation: btnFloat 3s ease-in-out infinite;
-}
-
-@keyframes btnFloat {
-
-    0%,
-    100% {
-        transform: translateY(0);
-    }
-
-    50% {
-        transform: translateY(-2px);
-    }
+    box-shadow: 0 6px 22px rgba(131, 56, 236, 0.45);
+    background-size: 160% 160%;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease, background-position 0.6s ease;
 }
 
 .btn-primary:hover {
-    box-shadow: 0 6px 30px rgba(58, 134, 255, 0.6);
+    box-shadow: 0 10px 34px rgba(255, 0, 110, 0.5);
     transform: translateY(-3px);
+    background-position: 100% 100%;
 }
 
 .btn-primary:active {
@@ -843,6 +857,42 @@ body {
     background: linear-gradient(135deg, rgba(0, 245, 255, 0.1) 0%, rgba(58, 134, 255, 0.1) 100%);
     border: 2px solid var(--neon-cyan);
     box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
+}
+
+.result-box.trusted {
+    background: linear-gradient(135deg, rgba(58, 134, 255, 0.12) 0%, rgba(37, 99, 235, 0.12) 100%);
+    border: 2px solid #3a86ff;
+    box-shadow: 0 0 30px rgba(58, 134, 255, 0.3);
+}
+
+.copy-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 15px;
+    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+    z-index: 2;
+}
+
+.copy-btn:hover {
+    color: var(--text-primary);
+    border-color: rgba(0, 245, 255, 0.4);
+    background: rgba(0, 245, 255, 0.08);
+}
+
+.copy-btn.copied {
+    color: var(--neon-cyan);
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 12px rgba(0, 245, 255, 0.4);
 }
 
 /* Loader */
@@ -953,6 +1003,10 @@ body {
     content: '🛡️';
 }
 
+.result-box.trusted .result-icon::before {
+    content: '🛡️';
+}
+
 .result-box.error .result-icon::before {
     content: '⚠️';
 }
@@ -1003,7 +1057,7 @@ body {
 
 .confidence-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--neon-cyan) 0%, var(--neon-purple) 50%, var(--neon-pink) 100%);
+    background: var(--grad);
     border-radius: 10px;
     width: 0;
     transition: width 1.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
